@@ -1,0 +1,53 @@
+name: audiobook_app
+description: Audiobook reader with paragraph-level TTS playback.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Audio: just_audio for playback, audio_service for MediaSession / notifications
+  just_audio: ^0.9.40
+  audio_service: ^0.18.15
+  rxdart: ^0.27.7
+
+  # Networking
+  dio: ^5.7.0
+
+  # Storage
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+
+  # Navigation & deep links
+  go_router: ^14.2.7
+  app_links: ^6.3.2
+
+  # UI
+  cached_network_image: ^3.4.1
+
+  # Widget
+  home_widget: ^0.6.0
+
+  # Utilities
+  collection: ^1.18.0
+  path: ^1.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
