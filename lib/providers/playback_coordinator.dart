@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/chapter.dart';
@@ -6,6 +9,7 @@ import '../services/audio_handler.dart';
 import '../services/chapter_api.dart';
 import '../services/novel_api.dart';
 import '../services/offline_content_service.dart';
+import '../widget/audiobook_home_widget.dart';
 import 'audio_providers.dart';
 import 'last_position_provider.dart';
 import 'progress_providers.dart';
@@ -19,9 +23,13 @@ import 'progress_providers.dart';
 class PlaybackCoordinator {
   PlaybackCoordinator(this._ref) {
     _wireCallbacks();
+    // Push widget updates whenever the player transitions play/pause —
+    // catches MediaSession-driven changes that don't go through this class.
+    _playbackSub = _handler.playbackState.listen((_) => _pushWidgetState());
   }
 
   final Ref _ref;
+  StreamSubscription<PlaybackState>? _playbackSub;
 
   AudiobookHandler get _handler => _ref.read(audioHandlerProvider);
 
@@ -33,6 +41,25 @@ class PlaybackCoordinator {
         onRemotePrevious: _onRemotePrevious,
       ),
     );
+  }
+
+  void _pushWidgetState() {
+    final s = _ref.read(audioStateProvider);
+    final idx = s.currentIndex;
+    final paragraph = (idx != null && idx < s.content.length)
+        ? s.content[idx]
+        : '';
+    AudiobookHomeWidget.updateState(
+      novelTitle: s.novel?.title ?? '',
+      chapterTitle: s.chapter?.chapterTitle ?? '',
+      paragraphText: paragraph,
+      isPlaying: s.isPlaying,
+      speed: s.playbackSpeed,
+    );
+  }
+
+  void dispose() {
+    _playbackSub?.cancel();
   }
 
   // ---- Chapter loading ----
@@ -89,6 +116,8 @@ class PlaybackCoordinator {
           chapter.chapterNumber,
         );
 
+    _pushWidgetState();
+
     if (autoPlay && prepared.isNotEmpty) {
       await playParagraph(0);
     }
@@ -121,6 +150,7 @@ class PlaybackCoordinator {
 
     _ref.read(audioStateProvider.notifier).setIsLoading(false);
     _ref.read(audioStateProvider.notifier).setIsPlaying(ok);
+    _pushWidgetState();
   }
 
   Future<void> toggle() async {
