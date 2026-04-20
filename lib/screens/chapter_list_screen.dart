@@ -60,10 +60,11 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
     final downloads = ref.watch(downloadsProvider);
     final lastPosition = ref.watch(lastPositionProvider)[widget.novel.slug];
 
-    // Chapter tiles + optional leading Continue Reading card. Index 0 is the
-    // continue card (when present); remaining indices map to _chapters.
-    final hasContinue = lastPosition != null;
-    final totalCount = _chapters.length + (hasContinue ? 1 : 0) + 1;
+    // Show a "Continue Reading" card when we know the last-read chapter —
+    // either from the server progress API or from the richer client-side
+    // position tracker (which also has paragraph info).
+    final hasLastRead = lastPosition != null || lastChapter != null;
+    final totalCount = _chapters.length + (hasLastRead ? 1 : 0) + 1;
 
     return Scaffold(
       appBar: AppBar(title: Text(widget.novel.title)),
@@ -80,30 +81,40 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
               padding: const EdgeInsets.only(bottom: 120),
               itemCount: totalCount,
               itemBuilder: (_, i) {
-                if (hasContinue && i == 0) {
+                if (hasLastRead && i == 0) {
+                  // Prefer client-side position (has paragraph), fall back
+                  // to server progress API (chapter only).
+                  final chNum = lastPosition?.chapter ?? lastChapter!;
+                  final chapter = _chapters.isEmpty
+                      ? Chapter(
+                          chapterNumber: chNum,
+                          chapterTitle: 'Chapter $chNum',
+                        )
+                      : _chapters.firstWhere(
+                          (c) => c.chapterNumber == chNum,
+                          orElse: () => Chapter(
+                            chapterNumber: chNum,
+                            chapterTitle: 'Chapter $chNum',
+                          ),
+                        );
                   return _ContinueReadingCard(
                     novel: widget.novel,
                     position: lastPosition,
+                    chapterNumber: chNum,
+                    chapterTitle: chapter.chapterTitle,
                     onTap: () {
-                      final chapter = _chapters.firstWhere(
-                        (c) => c.chapterNumber == lastPosition.chapter,
-                        orElse: () => Chapter(
-                          chapterNumber: lastPosition.chapter,
-                          chapterTitle: 'Chapter ${lastPosition.chapter}',
-                        ),
-                      );
                       context.push(
                         '/reader',
                         extra: ReaderArgs(
                           novel: widget.novel,
                           chapter: chapter,
-                          startParagraph: lastPosition.paragraph,
+                          startParagraph: lastPosition?.paragraph,
                         ),
                       );
                     },
                   );
                 }
-                final chapterIndex = i - (hasContinue ? 1 : 0);
+                final chapterIndex = i - (hasLastRead ? 1 : 0);
                 if (chapterIndex >= _chapters.length) {
                   return Padding(
                     padding: const EdgeInsets.all(16),
@@ -170,12 +181,16 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
 class _ContinueReadingCard extends StatelessWidget {
   const _ContinueReadingCard({
     required this.novel,
-    required this.position,
+    this.position,
+    required this.chapterNumber,
+    required this.chapterTitle,
     required this.onTap,
   });
 
   final Novel novel;
-  final LastPosition position;
+  final LastPosition? position;
+  final int chapterNumber;
+  final String chapterTitle;
   final VoidCallback onTap;
 
   @override
@@ -211,16 +226,18 @@ class _ContinueReadingCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                'Chapter ${position.chapter} · Paragraph ${position.paragraph}',
+                position != null
+                    ? 'Chapter $chapterNumber · Paragraph ${position!.paragraph}'
+                    : 'Chapter $chapterNumber: $chapterTitle',
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              if (position.preview.isNotEmpty) ...[
+              if (position != null && position!.preview.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Text(
-                  position.preview,
+                  position!.preview,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
