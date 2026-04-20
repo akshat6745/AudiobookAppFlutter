@@ -49,11 +49,16 @@ class PlaybackCoordinator {
     final paragraph = (idx != null && idx < s.content.length)
         ? s.content[idx]
         : '';
+    // Use the handler's playbackState as the source of truth for isPlaying —
+    // audioStateProvider lags behind when media buttons (widget/notification)
+    // trigger play/pause directly on the handler.
+    final handlerPlaying =
+        _handler.playbackState.valueOrNull?.playing ?? s.isPlaying;
     AudiobookHomeWidget.updateState(
       novelTitle: s.novel?.title ?? '',
       chapterTitle: s.chapter?.chapterTitle ?? '',
       paragraphText: paragraph,
-      isPlaying: s.isPlaying,
+      isPlaying: handlerPlaying,
       speed: s.playbackSpeed,
     );
   }
