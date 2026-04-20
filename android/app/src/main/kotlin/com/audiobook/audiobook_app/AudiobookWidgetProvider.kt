@@ -3,16 +3,23 @@ package com.audiobook.audiobook_app
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.view.KeyEvent
 import android.widget.RemoteViews
 import es.antonborri.home_widget.HomeWidgetPlugin
 
 /**
- * Glance-card widget that mirrors the current playback state. The widget
- * is a single tap target: tapping anywhere launches the app. All transport
- * controls live in the in-app mini-player and the notification shade.
+ * Home-screen widget that mirrors current playback state and forwards
+ * transport controls to audio_service via the same MediaButton receiver
+ * that handles the notification shade.
+ *
+ *  - Play/Pause → KEYCODE_MEDIA_PLAY_PAUSE
+ *  - Next       → KEYCODE_MEDIA_NEXT
+ *  - Previous   → KEYCODE_MEDIA_PREVIOUS
+ *  - Body tap   → brings the app to the foreground
  *
  * State keys are written by AudiobookHomeWidget.updateState() on the Dart
  * side; we read them via HomeWidgetPlugin.getData().
@@ -38,6 +45,7 @@ class AudiobookWidgetProvider : AppWidgetProvider() {
         val speed = readDouble(prefs, "widget_speed", 1.0)
 
         val views = RemoteViews(context.packageName, R.layout.widget_layout)
+
         views.setTextViewText(
             R.id.widget_chapter,
             if (chapter.isNotEmpty()) chapter else "Tap to open Audiobook"
@@ -51,25 +59,62 @@ class AudiobookWidgetProvider : AppWidgetProvider() {
             }
         )
         views.setImageViewResource(
-            R.id.widget_state_icon,
+            R.id.widget_play_pause,
             if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
         )
         views.setTextViewText(R.id.widget_speed, formatSpeed(speed))
+
+        // Tap the body → bring the app forward (no URI → no go_router 404).
         views.setOnClickPendingIntent(R.id.widget_root, launchAppIntent(context))
+
+        // Transport controls → MediaButton broadcasts handled by audio_service.
+        views.setOnClickPendingIntent(
+            R.id.widget_play_pause,
+            mediaKeyIntent(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        )
+        views.setOnClickPendingIntent(
+            R.id.widget_next,
+            mediaKeyIntent(context, KeyEvent.KEYCODE_MEDIA_NEXT)
+        )
+        views.setOnClickPendingIntent(
+            R.id.widget_prev,
+            mediaKeyIntent(context, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        )
+
         return views
     }
 
     private fun launchAppIntent(context: Context): PendingIntent {
-        // Plain launch intent (no ACTION_VIEW / data URI) — we only want to
-        // bring the app to the foreground at its current location. A deep
-        // link here would be handed to go_router and 404 since the widget
-        // host path isn't a declared route.
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         return PendingIntent.getActivity(
             context,
             0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /**
+     * Build a PendingIntent that fires a MEDIA_BUTTON broadcast targeted at
+     * audio_service's MediaButtonReceiver. This reuses the exact path the
+     * lock-screen / notification controls use, so the widget inherits
+     * audio_service's play/pause/next/prev semantics for free.
+     */
+    private fun mediaKeyIntent(context: Context, keyCode: Int): PendingIntent {
+        val receiver = ComponentName(
+            context.packageName,
+            "com.ryanheise.audioservice.MediaButtonReceiver"
+        )
+        val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+            component = receiver
+            putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        }
+        // Unique requestCode per key so PendingIntents don't collide.
+        return PendingIntent.getBroadcast(
+            context,
+            keyCode,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )

@@ -3,94 +3,103 @@
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="horizontal"
-    android:gravity="center_vertical"
+    android:orientation="vertical"
     android:background="@drawable/widget_bg"
-    android:padding="14dp">
+    android:padding="16dp">
 
-    <!-- Accent icon tile -->
-    <FrameLayout
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:background="@drawable/widget_cover_bg">
-        <ImageView
-            android:layout_width="26dp"
-            android:layout_height="26dp"
-            android:layout_gravity="center"
-            android:src="@drawable/ic_widget_music"
-            android:contentDescription="@null"/>
-    </FrameLayout>
-
-    <!-- Text stack -->
+    <!-- Header: small-caps label + speed pill -->
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:layout_marginStart="14dp">
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
         <TextView
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
             android:text="NOW PLAYING"
             android:textColor="#38BDF8"
-            android:textSize="9sp"
-            android:letterSpacing="0.18"
+            android:textSize="10sp"
             android:textAllCaps="true"
-            android:fontFamily="sans-serif-medium"/>
-
-        <TextView
-            android:id="@+id/widget_chapter"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
-            android:text="Tap to open Audiobook"
-            android:textColor="#F5F5FA"
-            android:textSize="14sp"
             android:fontFamily="sans-serif-medium"
             android:maxLines="1"
             android:ellipsize="end"/>
 
         <TextView
-            android:id="@+id/widget_paragraph"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="No audiobook playing"
-            android:textColor="#9CA3AF"
-            android:textSize="11sp"
-            android:maxLines="1"
-            android:ellipsize="end"/>
-    </LinearLayout>
-
-    <!-- Status pill: play/pause glyph + speed -->
-    <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="@drawable/widget_speed_bg"
-        android:layout_marginStart="10dp"
-        android:paddingStart="10dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp">
-
-        <ImageView
-            android:id="@+id/widget_state_icon"
-            android:layout_width="14dp"
-            android:layout_height="14dp"
-            android:src="@drawable/ic_widget_play"
-            android:contentDescription="@null"/>
-
-        <TextView
             android:id="@+id/widget_speed"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
             android:text="1.0×"
             android:textColor="#F5F5FA"
             android:textSize="11sp"
-            android:fontFamily="sans-serif-medium"/>
+            android:fontFamily="sans-serif-medium"
+            android:background="@drawable/widget_speed_bg"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"/>
     </LinearLayout>
+
+    <!-- Chapter title -->
+    <TextView
+        android:id="@+id/widget_chapter"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="Tap to open Audiobook"
+        android:textColor="#F5F5FA"
+        android:textSize="17sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+
+    <!-- Controls row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="12dp">
+
+        <ImageView
+            android:id="@+id/widget_prev"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:padding="10dp"
+            android:src="@drawable/ic_widget_prev"
+            android:contentDescription="Previous paragraph"/>
+
+        <ImageView
+            android:id="@+id/widget_play_pause"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="24dp"
+            android:layout_marginEnd="24dp"
+            android:padding="15dp"
+            android:src="@drawable/ic_widget_play"
+            android:background="@drawable/widget_play_bg"
+            android:contentDescription="Play or pause"/>
+
+        <ImageView
+            android:id="@+id/widget_next"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:padding="10dp"
+            android:src="@drawable/ic_widget_next"
+            android:contentDescription="Next paragraph"/>
+    </LinearLayout>
+
+    <!-- Paragraph preview -->
+    <TextView
+        android:id="@+id/widget_paragraph"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="No audiobook playing"
+        android:textColor="#D1D5DB"
+        android:textSize="14sp"
+        android:lineSpacingExtra="3dp"
+        android:maxLines="2"
+        android:ellipsize="end"/>
 </LinearLayout>
