@@ -32,7 +32,15 @@ class AudiobookWidgetProvider : AppWidgetProvider() {
         appWidgetIds: IntArray
     ) {
         appWidgetIds.forEach { id ->
-            appWidgetManager.updateAppWidget(id, buildViews(context))
+            val views = buildViews(context)
+            views.setRemoteAdapter(
+                R.id.widget_paragraph_list,
+                Intent(context, ParagraphWidgetService::class.java)
+            )
+            appWidgetManager.updateAppWidget(id, views)
+            appWidgetManager.notifyAppWidgetViewDataChanged(
+                id, R.id.widget_paragraph_list
+            )
         }
     }
 
@@ -40,23 +48,18 @@ class AudiobookWidgetProvider : AppWidgetProvider() {
         val prefs = HomeWidgetPlugin.getData(context)
         val novel = prefs.getString("widget_novel_title", "") ?: ""
         val chapter = prefs.getString("widget_chapter_title", "") ?: ""
-        val paragraph = prefs.getString("widget_paragraph_text", "") ?: ""
         val isPlaying = prefs.getBoolean("widget_is_playing", false)
         val speed = readDouble(prefs, "widget_speed", 1.0)
 
         val views = RemoteViews(context.packageName, R.layout.widget_layout)
 
         views.setTextViewText(
-            R.id.widget_chapter,
-            if (chapter.isNotEmpty()) chapter else "Tap to open Audiobook"
+            R.id.widget_novel,
+            if (novel.isNotEmpty()) novel else ""
         )
         views.setTextViewText(
-            R.id.widget_paragraph,
-            when {
-                paragraph.isNotEmpty() -> paragraph
-                novel.isNotEmpty() -> novel
-                else -> "No audiobook playing"
-            }
+            R.id.widget_chapter,
+            if (chapter.isNotEmpty()) chapter else "Tap to open Audiobook"
         )
         views.setImageViewResource(
             R.id.widget_play_pause,
