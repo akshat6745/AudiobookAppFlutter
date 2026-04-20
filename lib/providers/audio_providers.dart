@@ -9,7 +9,7 @@ import '../services/audio_handler.dart';
 final narratorVoiceProvider =
     StateProvider<String>((_) => 'en-US-AvaMultilingualNeural');
 final dialogueVoiceProvider =
-    StateProvider<String>((_) => 'en-US-RyanNeural');
+    StateProvider<String>((_) => 'en-GB-RyanNeural');
 
 final audioCacheProvider = Provider<AudioCacheManager>((ref) {
   final narrator = ref.watch(narratorVoiceProvider);

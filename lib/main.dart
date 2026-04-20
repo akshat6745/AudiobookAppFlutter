@@ -16,7 +16,7 @@ Future<void> main() async {
   // UI reads the same cache that's feeding the player.
   final cache = AudioCacheManager(
     narratorVoice: 'en-US-AvaMultilingualNeural',
-    dialogueVoice: 'en-US-RyanNeural',
+    dialogueVoice: 'en-GB-RyanNeural',
   );
 
   final handler = await AudioService.init<AudiobookHandler>(
