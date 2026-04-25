@@ -1,10 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../services/storage.dart';
 import '../services/user_api.dart';
 
-const _secureStorage = FlutterSecureStorage();
-const _userKey = 'user';
+// Username is not sensitive on its own (no token / password is stored;
+// the API just echoes the username back as a query parameter). Plain
+// SharedPreferences is far more reliable than the Android Keystore-backed
+// FlutterSecureStorage, which has been observed to lose keys after device
+// restarts or aggressive battery management.
+const _userKey = 'auth_user';
 
 class AuthState {
   final String? user;
@@ -25,7 +29,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> _restore() async {
     try {
-      final stored = await _secureStorage.read(key: _userKey);
+      final stored = await Storage.getString(_userKey);
       state = AuthState(user: stored, isLoading: false);
     } catch (_) {
       state = const AuthState(isLoading: false);
@@ -37,13 +41,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       // Demo bypass
       if (username == 'demo' && password == 'demo') {
-        await _secureStorage.write(key: _userKey, value: username);
+        await Storage.setString(_userKey, username);
         state = AuthState(user: username);
         return true;
       }
       final ok = await userApi.login(username, password);
       if (ok) {
-        await _secureStorage.write(key: _userKey, value: username);
+        await Storage.setString(_userKey, username);
         state = AuthState(user: username);
         return true;
       }
@@ -52,7 +56,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {
       // Fallback to demo if network error
       if (username == 'demo' && password == 'demo') {
-        await _secureStorage.write(key: _userKey, value: username);
+        await Storage.setString(_userKey, username);
         state = AuthState(user: username);
         return true;
       }
@@ -74,7 +78,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
-    await _secureStorage.delete(key: _userKey);
+    await Storage.remove(_userKey);
     state = const AuthState();
   }
 }

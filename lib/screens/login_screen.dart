@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -34,14 +35,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: Column(
+              child: AutofillGroup(
+               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 24),
                   const Icon(Icons.headset, size: 80, color: Colors.white),
                   const SizedBox(height: 16),
                   const Text(
-                    'AudioBook Reader',
+                    'Speaking Books',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
@@ -58,6 +60,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(height: 40),
                   TextField(
                     controller: _username,
+                    autofillHints: const [AutofillHints.username],
+                    textInputAction: TextInputAction.next,
                     decoration: const InputDecoration(
                       labelText: 'Username',
                       prefixIcon: Icon(Icons.person),
@@ -65,8 +69,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 16),
                   TextField(
+                    key: const ValueKey('password_field'),
                     controller: _password,
                     obscureText: !_showPassword,
+                    autofillHints: const [AutofillHints.password],
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _submitting ? null : _submit(),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock),
@@ -120,6 +128,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ],
                   ),
                 ],
+               ),
               ),
             ),
           ),
@@ -139,6 +148,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         );
     if (!mounted) return;
     if (ok) {
+      // Tell Android to prompt saving credentials to Password Manager.
+      TextInput.finishAutofillContext();
       context.go('/novels');
     } else {
       setState(() {
