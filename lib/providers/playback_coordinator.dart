@@ -134,6 +134,11 @@ class PlaybackCoordinator {
     final audio = _ref.read(audioStateProvider);
     if (index < 0 || index >= audio.content.length) return;
 
+    // Silence current audio immediately so the user doesn't hear the old
+    // paragraph while the new one loads. Use pause (not stop) to avoid
+    // tearing down the MediaSession.
+    await _handler.pause();
+
     _ref.read(audioStateProvider.notifier).setCurrentIndex(index);
     _ref.read(audioStateProvider.notifier).setIsLoading(true);
 

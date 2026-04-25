@@ -87,14 +87,38 @@ class GlobalMiniPlayer extends ConsumerWidget {
                       icon: const Icon(Icons.skip_previous),
                       onPressed: coord.playPrevious,
                     ),
-                    IconButton(
-                      icon: Icon(
-                        playing ? Icons.pause_circle : Icons.play_circle,
-                        size: 36,
-                        color: AppColors.primary,
-                      ),
-                      onPressed: coord.toggle,
-                    ),
+                    Builder(builder: (_) {
+                      final ps = snapshot.data;
+                      final loading = ps != null &&
+                          !playing &&
+                          (ps.processingState ==
+                                  AudioProcessingState.loading ||
+                              ps.processingState ==
+                                  AudioProcessingState.buffering);
+                      if (loading) {
+                        return const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        );
+                      }
+                      return IconButton(
+                        icon: Icon(
+                          playing
+                              ? Icons.pause_circle
+                              : Icons.play_circle,
+                          size: 36,
+                          color: AppColors.primary,
+                        ),
+                        onPressed: coord.toggle,
+                      );
+                    }),
                     IconButton(
                       icon: const Icon(Icons.skip_next),
                       onPressed: coord.playNext,

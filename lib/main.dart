@@ -1,4 +1,5 @@
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,10 +25,14 @@ Future<void> main() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.audiobook.audiobook_app.audio',
       androidNotificationChannelName: 'Audiobook Playback',
-      androidNotificationOngoing: true,
-      androidStopForegroundOnPause: true,
+      androidStopForegroundOnPause: false,
     ),
   );
+
+  // Configure the audio session for spoken-word content so the OS knows to
+  // duck (lower volume) for transient sounds instead of pausing playback.
+  final session = await AudioSession.instance;
+  await session.configure(const AudioSessionConfiguration.speech());
 
   runApp(
     ProviderScope(
