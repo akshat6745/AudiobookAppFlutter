@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/chapter.dart';
+import '../models/downloaded_chapter.dart';
 import '../models/novel.dart';
 import '../providers/audio_providers.dart';
+import '../providers/download_providers.dart';
 import '../providers/playback_coordinator.dart';
 import '../theme/app_theme.dart';
 import '../widgets/global_mini_player.dart';
@@ -123,6 +125,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     final hasPlaying = state.currentIndex != null;
 
+    final downloads = ref.watch(downloadsProvider);
+    final downloadRecord = _findDownload(downloads.items);
+    final downloaded = downloadRecord?.status == DownloadStatusValue.completed;
+    final downloading = downloadRecord?.status == DownloadStatusValue.pending ||
+        downloadRecord?.status == DownloadStatusValue.processing ||
+        downloads.active.containsKey(downloadRecord?.downloadId);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -151,6 +160,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 }
               },
             ),
+          IconButton(
+            tooltip: downloaded
+                ? 'Downloaded for offline playback'
+                : (downloading ? 'Downloading…' : 'Download for offline'),
+            icon: Icon(
+              downloaded
+                  ? Icons.check_circle
+                  : (downloading ? Icons.downloading : Icons.download),
+              color: downloaded
+                  ? AppColors.success
+                  : (downloading ? AppColors.accent : null),
+            ),
+            onPressed: downloaded || downloading ? null : _startDownload,
+          ),
           IconButton(
             onPressed: () => _showSettings(context),
             icon: const Icon(Icons.settings),
@@ -214,6 +237,31 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ],
       ),
     );
+  }
+
+  DownloadedChapter? _findDownload(List<DownloadedChapter> list) {
+    try {
+      return list.firstWhere(
+        (d) =>
+            d.novelName == widget.novel.slug &&
+            d.chapterNumber == widget.chapter.chapterNumber,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _startDownload() async {
+    final narrator = ref.read(narratorVoiceProvider);
+    final dialogue = ref.read(dialogueVoiceProvider);
+    await ref.read(downloadsProvider.notifier).startDownload(
+          DownloadRequest(
+            novelName: widget.novel.slug,
+            chapterNumber: widget.chapter.chapterNumber,
+            narratorVoice: narrator,
+            dialogueVoice: dialogue,
+          ),
+        );
   }
 
   void _showSettings(BuildContext context) {

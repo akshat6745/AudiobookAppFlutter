@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../models/chapter.dart';
 import '../models/downloaded_chapter.dart';
+import '../models/novel.dart';
 import '../providers/download_providers.dart';
+import '../router.dart';
+import '../services/offline_content_service.dart';
 import '../theme/app_theme.dart';
 
 class DownloadsScreen extends ConsumerWidget {
@@ -18,7 +23,8 @@ class DownloadsScreen extends ConsumerWidget {
 
     if (state.items.isEmpty) {
       return const Center(
-        child: Text('No downloaded chapters yet', style: TextStyle(color: AppColors.textMuted)),
+        child: Text('No downloaded chapters yet',
+            style: TextStyle(color: AppColors.textMuted)),
       );
     }
 
@@ -30,6 +36,13 @@ class DownloadsScreen extends ConsumerWidget {
         itemBuilder: (_, i) {
           final item = state.items[i];
           final active = state.active[item.downloadId];
+          final ready = active == null &&
+              item.status == DownloadStatusValue.completed;
+          // A "complete" record can still have gaps if some paragraphs
+          // failed every retry. Surface a repair button for those.
+          final hasGaps = ready &&
+              item.totalFiles > 0 &&
+              item.completedFiles < item.totalFiles;
           return Card(
             child: ListTile(
               leading: _statusIcon(item, active),
@@ -41,8 +54,12 @@ class DownloadsScreen extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _statusText(item, active),
-                    style: const TextStyle(fontSize: 12),
+                    _statusText(item, active, hasGaps: hasGaps),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          hasGaps ? AppColors.accent : null,
+                    ),
                   ),
                   if (active != null &&
                       active.status == DownloadStatusValue.processing)
@@ -55,15 +72,67 @@ class DownloadsScreen extends ConsumerWidget {
                     ),
                 ],
               ),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => ref
-                    .read(downloadsProvider.notifier)
-                    .deleteDownload(item.downloadId),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (hasGaps)
+                    IconButton(
+                      tooltip: 'Retry missing paragraphs',
+                      icon: const Icon(Icons.refresh,
+                          color: AppColors.accent),
+                      onPressed: () =>
+                          _repairChapter(context, ref, item.downloadId),
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => ref
+                        .read(downloadsProvider.notifier)
+                        .deleteDownload(item.downloadId),
+                  ),
+                ],
               ),
+              onTap: ready ? () => _openReader(context, item) : null,
             ),
           );
         },
+      ),
+    );
+  }
+
+  Future<void> _openReader(
+      BuildContext context, DownloadedChapter item) async {
+    // Read the chapter title from the downloaded content.json so the
+    // reader's metadata renders the real chapter name instead of an
+    // empty string. Fall back to a generic title if anything fails.
+    String chapterTitle = 'Chapter ${item.chapterNumber}';
+    try {
+      final offline = await offlineContentService.getOfflineChapterContent(
+        item.novelName,
+        item.chapterNumber,
+      );
+      if (offline?.chapterTitle != null && offline!.chapterTitle!.isNotEmpty) {
+        chapterTitle = offline.chapterTitle!;
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
+    context.push(
+      '/reader',
+      extra: ReaderArgs(
+        novel: Novel(
+          id: item.novelName,
+          slug: item.novelName,
+          title: _pretty(item.novelName),
+          author: null,
+          chapterCount: null,
+          source: NovelSource.cloudflareD1,
+          description: null,
+          isPublic: false,
+        ),
+        chapter: Chapter(
+          chapterNumber: item.chapterNumber,
+          chapterTitle: chapterTitle,
+        ),
       ),
     );
   }
@@ -82,19 +151,51 @@ class DownloadsScreen extends ConsumerWidget {
     }
   }
 
-  String _statusText(DownloadedChapter item, DownloadStatus? active) {
+  String _statusText(
+    DownloadedChapter item,
+    DownloadStatus? active, {
+    bool hasGaps = false,
+  }) {
     if (active != null) {
       return 'Downloading… ${active.progress.toStringAsFixed(0)}%';
     }
     switch (item.status) {
       case DownloadStatusValue.completed:
-        return 'Ready for offline playback';
+        if (hasGaps) {
+          return '${item.completedFiles}/${item.totalFiles} paragraphs · '
+              'tap retry to fetch missing';
+        }
+        return 'Tap to play offline';
       case DownloadStatusValue.processing:
       case DownloadStatusValue.pending:
         return 'Preparing…';
       case DownloadStatusValue.error:
         return 'Failed';
     }
+  }
+
+  Future<void> _repairChapter(
+    BuildContext context,
+    WidgetRef ref,
+    String downloadId,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Retrying missing paragraphs…')),
+    );
+    final stillMissing =
+        await ref.read(downloadsProvider.notifier).repairChapter(downloadId);
+    if (!context.mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          stillMissing == 0
+              ? 'All paragraphs downloaded'
+              : '$stillMissing paragraph(s) still unavailable',
+        ),
+      ),
+    );
   }
 
   String _pretty(String slug) {

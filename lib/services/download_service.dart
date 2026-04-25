@@ -101,47 +101,158 @@ class DownloadService {
     completedFiles++;
     onProgress?.call(completedFiles, totalFiles);
 
-    // 3. Paragraph MP3s (max 5 concurrent)
+    // 3. Paragraph MP3s (max 5 concurrent). Per-paragraph failures must
+    // NOT halt the whole batch — we keep going and let the repair pass
+    // pick up any stragglers afterwards.
     const concurrency = 5;
+
     for (var start = 0; start < paragraphCount; start += concurrency) {
       final batch = <Future<void>>[];
       for (var i = start;
           i < start + concurrency && i < paragraphCount;
           i++) {
-        final local = p.join(dir, '$i.mp3');
+        final idx = i;
         batch.add(() async {
-          final file = File(local);
-          if (file.existsSync()) {
-            try {
-              await _validateAudioFile(local);
-              return;
-            } catch (_) {
-              await file.delete();
-            }
+          try {
+            await _downloadParagraph(downloadId, dir, idx);
+            completedFiles++;
+            onProgress?.call(completedFiles, totalFiles);
+          } catch (_) {
+            // Swallowed — repair pass will retry.
           }
-          await _downloadWithRetry(
-            downloadApi.fileUrl(downloadId, '$i.mp3'),
-            local,
-          );
-          await _validateAudioFile(local);
-        }()
-            .then((_) {
-          completedFiles++;
-          onProgress?.call(completedFiles, totalFiles);
-        }));
+        }());
       }
       await Future.wait(batch);
     }
 
+    // 4. Repair passes: scan the directory for missing or corrupt files
+    // and re-fetch them. Up to 3 passes with increasing delays. Disk
+    // state is the source of truth, so this is robust to in-memory
+    // tracking drift.
+    final stillMissing = await _repairMissingParagraphs(
+      downloadId,
+      paragraphCount,
+      maxPasses: 3,
+      onParagraphRecovered: () {
+        completedFiles++;
+        onProgress?.call(completedFiles, totalFiles);
+      },
+    );
+
+    // Mark the download completed. Playback gracefully falls back to TTS
+    // for any paragraph that's still missing after all repair attempts.
     await _updateRecord(
       downloadId,
       (rec) => rec.copyWith(
         status: DownloadStatusValue.completed,
         progress: 100,
         totalFiles: totalFiles,
-        completedFiles: totalFiles,
+        completedFiles: totalFiles - stillMissing,
       ),
     );
+  }
+
+  /// Public entry point for repairing a download whose files are
+  /// missing or corrupt. Used by `downloadFiles` and can be called
+  /// manually (e.g. from a "Retry missing" UI button).
+  Future<int> repairChapter(String downloadId) async {
+    final dir = await _chapterDir(downloadId);
+    final contentPath = p.join(dir, 'content.json');
+    if (!File(contentPath).existsSync()) {
+      // Nothing we can do without content.json describing the chapter.
+      return -1;
+    }
+    int paragraphCount;
+    try {
+      final data = jsonDecode(await File(contentPath).readAsString())
+          as Map<String, dynamic>;
+      paragraphCount =
+          (data['paragraphs'] as List<dynamic>? ?? const []).length;
+    } catch (_) {
+      return -1;
+    }
+    return _repairMissingParagraphs(
+      downloadId,
+      paragraphCount,
+      maxPasses: 3,
+    );
+  }
+
+  /// Download one paragraph file, validating any existing file first.
+  Future<void> _downloadParagraph(
+    String downloadId,
+    String dir,
+    int index,
+  ) async {
+    final local = p.join(dir, '$index.mp3');
+    final file = File(local);
+    if (file.existsSync()) {
+      try {
+        await _validateAudioFile(local);
+        return; // Already valid on disk.
+      } catch (_) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+    }
+    await _downloadWithRetry(
+      downloadApi.fileUrl(downloadId, '$index.mp3'),
+      local,
+    );
+    await _validateAudioFile(local);
+  }
+
+  /// Scan the chapter directory for missing/corrupt paragraph files and
+  /// re-fetch them. Up to [maxPasses] passes with increasing back-off.
+  /// Returns the count of paragraphs still missing after the last pass.
+  Future<int> _repairMissingParagraphs(
+    String downloadId,
+    int paragraphCount, {
+    required int maxPasses,
+    void Function()? onParagraphRecovered,
+  }) async {
+    final dir = await _chapterDir(downloadId);
+
+    Future<List<int>> scan() async {
+      final missing = <int>[];
+      for (var i = 0; i < paragraphCount; i++) {
+        final local = p.join(dir, '$i.mp3');
+        final f = File(local);
+        var valid = false;
+        if (f.existsSync() && (await f.length()) >= 1024) {
+          try {
+            await _validateAudioFile(local);
+            valid = true;
+          } catch (_) {}
+        }
+        if (!valid) missing.add(i);
+      }
+      return missing;
+    }
+
+    for (var pass = 0; pass < maxPasses; pass++) {
+      final missing = await scan();
+      if (missing.isEmpty) return 0;
+
+      if (pass > 0) {
+        // Back off so transient backend issues have time to clear.
+        await Future.delayed(Duration(seconds: 3 * pass));
+      }
+
+      for (final idx in missing) {
+        try {
+          await _downloadParagraph(downloadId, dir, idx);
+          onParagraphRecovered?.call();
+        } catch (_) {
+          // Try again on the next pass.
+        }
+      }
+    }
+
+    // Final accounting after the last pass.
+    final stillMissing = await scan();
+    return stillMissing.length;
   }
 
   Future<DownloadStatus> pollUntilComplete(

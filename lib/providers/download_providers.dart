@@ -71,6 +71,14 @@ class DownloadsNotifier extends StateNotifier<DownloadsState> {
     await downloadService.deleteDownload(downloadId);
     await refresh();
   }
+
+  /// Re-fetch any missing or corrupt paragraph files for a chapter that's
+  /// already marked complete. Returns the count still missing.
+  Future<int> repairChapter(String downloadId) async {
+    final missing = await downloadService.repairChapter(downloadId);
+    await refresh();
+    return missing;
+  }
 }
 
 final downloadsProvider =
