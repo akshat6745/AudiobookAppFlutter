@@ -23,18 +23,11 @@ class AuthState {
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier() : super(const AuthState(isLoading: true)) {
-    _restore();
-  }
-
-  Future<void> _restore() async {
-    try {
-      final stored = await Storage.getString(_userKey);
-      state = AuthState(user: stored, isLoading: false);
-    } catch (_) {
-      state = const AuthState(isLoading: false);
-    }
-  }
+  // initialUser is pre-read from SharedPreferences in main() so the router
+  // sees the correct auth state synchronously on first render — no async
+  // restore race that redirects to /login on every app start / web refresh.
+  AuthNotifier({String? initialUser})
+      : super(AuthState(user: initialUser, isLoading: false));
 
   Future<bool> login(String username, String password) async {
     state = state.copyWith(isLoading: true);
