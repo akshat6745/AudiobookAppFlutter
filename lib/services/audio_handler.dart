@@ -100,8 +100,9 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           ? '${paragraphText.substring(0, 120)}...'
           : paragraphText;
 
+      final audioUri = audio.audioUri!;
       final mediaItem = MediaItem(
-        id: audio.audioUri!,
+        id: 'paragraph_${audio.paragraphIndex}',
         title: _chapterTitle.isNotEmpty
             ? _chapterTitle
             : 'Paragraph ${audio.paragraphIndex + 1}',
@@ -112,7 +113,12 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
       );
       this.mediaItem.add(mediaItem);
 
-      await _player.setFilePath(audio.audioUri!);
+      // Use AudioSource.uri so the same code path handles local file paths
+      // (mobile/desktop) and data:/http: URIs (web).
+      final uri = (audioUri.startsWith('data:') || audioUri.startsWith('http'))
+          ? Uri.parse(audioUri)
+          : Uri.file(audioUri);
+      await _player.setAudioSource(AudioSource.uri(uri));
 
       if (!_rateApplied) {
         await _player.setSpeed(_playbackSpeed);

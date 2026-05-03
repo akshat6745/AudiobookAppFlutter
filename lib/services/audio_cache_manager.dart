@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert' show base64Encode;
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -115,18 +117,20 @@ class AudioCacheManager {
   }
 
   Future<void> clearCache() async {
-    final files = _cache.values
+    final uris = _cache.values
         .where((v) => v.audioUri != null)
         .map((v) => v.audioUri!)
         .toList();
     _cache.clear();
     _activeRequests.clear();
     _offlineCache = null;
-    for (final path in files) {
-      try {
-        final f = File(path);
-        if (f.existsSync()) await f.delete();
-      } catch (_) {}
+    if (!kIsWeb) {
+      for (final path in uris) {
+        try {
+          final f = File(path);
+          if (f.existsSync()) await f.delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -178,8 +182,8 @@ class AudioCacheManager {
     String text,
     ParagraphAudioData entry,
   ) async {
-    // 1. Offline-first lookup
-    if (_currentNovelName != null && _currentChapterNumber != null) {
+    // 1. Offline-first lookup (file system only available on mobile/desktop)
+    if (!kIsWeb && _currentNovelName != null && _currentChapterNumber != null) {
       try {
         _offlineCache ??= await _loadOfflineBundle(
           _currentNovelName!,
@@ -217,12 +221,17 @@ class AudioCacheManager {
       dialogueVoice: _dialogueVoice,
     );
 
-    final cachePath = await _ttsCachePath(index);
-    final file = File(cachePath);
-    await file.writeAsBytes(bytes);
+    if (kIsWeb) {
+      // Web has no writable file system — store audio as an in-memory data URI
+      // so just_audio can load it via a standard <audio src="data:..."> element.
+      entry.audioUri = 'data:audio/mpeg;base64,${base64Encode(bytes)}';
+    } else {
+      final cachePath = await _ttsCachePath(index);
+      await File(cachePath).writeAsBytes(bytes);
+      entry.audioUri = cachePath;
+    }
 
     entry.audioReceived = true;
-    entry.audioUri = cachePath;
     entry.isLoading = false;
     _cache[index] = entry;
   }
@@ -314,13 +323,15 @@ class AudioCacheManager {
       _cache.remove(i);
     }
 
-    for (final path in filesToDelete) {
-      () async {
-        try {
-          final f = File(path);
-          if (f.existsSync()) await f.delete();
-        } catch (_) {}
-      }();
+    if (!kIsWeb) {
+      for (final path in filesToDelete) {
+        () async {
+          try {
+            final f = File(path);
+            if (f.existsSync()) await f.delete();
+          } catch (_) {}
+        }();
+      }
     }
   }
 }
