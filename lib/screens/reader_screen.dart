@@ -1,7 +1,8 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:go_router/go_router.dart';
 
 import '../models/chapter.dart';
@@ -11,6 +12,7 @@ import '../providers/audio_providers.dart';
 import '../providers/download_providers.dart';
 import '../providers/playback_coordinator.dart';
 import '../router.dart';
+import '../services/chapter_api.dart';
 import '../theme/app_theme.dart';
 import '../widgets/global_mini_player.dart';
 
@@ -38,16 +40,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _initialized = false;
   bool _autoScrolling = false;
   bool _followMode = false;
+  List<Chapter> _localChapters = [];
 
   @override
   void initState() {
     super.initState();
+    _localChapters = List.of(widget.chapters);
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
   Future<void> _init() async {
     if (_initialized) return;
     _initialized = true;
+    // Load chapter list in the background so prev/next buttons activate even
+    // when the reader is opened from the mini player or downloads screen.
+    if (_localChapters.isEmpty) unawaited(_loadChapterList());
     final coord = ref.read(playbackCoordinatorProvider);
     await coord.loadChapter(
       novel: widget.novel,
@@ -149,7 +156,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             tooltip: 'Previous chapter',
             chapter: _adjacentChapter(-1),
             novel: widget.novel,
-            allChapters: widget.chapters,
+            allChapters: _localChapters,
             context: context,
           ),
           _ChapterNavButton(
@@ -157,7 +164,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             tooltip: 'Next chapter',
             chapter: _adjacentChapter(1),
             novel: widget.novel,
-            allChapters: widget.chapters,
+            allChapters: _localChapters,
             context: context,
           ),
           if (hasPlaying)
@@ -260,16 +267,33 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  Future<void> _loadChapterList() async {
+    try {
+      final first = await chapterApi.getChaptersList(widget.novel.slug);
+      var all = List<Chapter>.of(first.chapters);
+      if (first.totalPages > 1) {
+        final rest = await Future.wait([
+          for (var p = 2; p <= first.totalPages; p++)
+            chapterApi.getChaptersList(widget.novel.slug, page: p),
+        ]);
+        for (final r in rest) {
+          all.addAll(r.chapters);
+        }
+        all.sort((a, b) => a.chapterNumber.compareTo(b.chapterNumber));
+      }
+      if (mounted) setState(() => _localChapters = all);
+    } catch (_) {}
+  }
+
   Chapter? _adjacentChapter(int delta) {
-    final chapters = widget.chapters;
-    if (chapters.isEmpty) return null;
-    final idx = chapters.indexWhere(
+    if (_localChapters.isEmpty) return null;
+    final idx = _localChapters.indexWhere(
       (c) => c.chapterNumber == widget.chapter.chapterNumber,
     );
     if (idx == -1) return null;
     final target = idx + delta;
-    if (target < 0 || target >= chapters.length) return null;
-    return chapters[target];
+    if (target < 0 || target >= _localChapters.length) return null;
+    return _localChapters[target];
   }
 
   DownloadedChapter? _findDownload(List<DownloadedChapter> list) {
