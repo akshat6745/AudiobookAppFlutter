@@ -2,12 +2,15 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:go_router/go_router.dart';
+
 import '../models/chapter.dart';
 import '../models/downloaded_chapter.dart';
 import '../models/novel.dart';
 import '../providers/audio_providers.dart';
 import '../providers/download_providers.dart';
 import '../providers/playback_coordinator.dart';
+import '../router.dart';
 import '../theme/app_theme.dart';
 import '../widgets/global_mini_player.dart';
 
@@ -17,10 +20,12 @@ class ReaderScreen extends ConsumerStatefulWidget {
     required this.novel,
     required this.chapter,
     this.startParagraph,
+    this.chapters = const [],
   });
   final Novel novel;
   final Chapter chapter;
   final int? startParagraph;
+  final List<Chapter> chapters;
 
   @override
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
@@ -139,6 +144,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           style: const TextStyle(fontSize: 16),
         ),
         actions: [
+          _ChapterNavButton(
+            icon: Icons.chevron_left,
+            tooltip: 'Previous chapter',
+            chapter: _adjacentChapter(-1),
+            novel: widget.novel,
+            allChapters: widget.chapters,
+            context: context,
+          ),
+          _ChapterNavButton(
+            icon: Icons.chevron_right,
+            tooltip: 'Next chapter',
+            chapter: _adjacentChapter(1),
+            novel: widget.novel,
+            allChapters: widget.chapters,
+            context: context,
+          ),
           if (hasPlaying)
             IconButton(
               tooltip: _followMode
@@ -237,6 +258,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ],
       ),
     );
+  }
+
+  Chapter? _adjacentChapter(int delta) {
+    final chapters = widget.chapters;
+    if (chapters.isEmpty) return null;
+    final idx = chapters.indexWhere(
+      (c) => c.chapterNumber == widget.chapter.chapterNumber,
+    );
+    if (idx == -1) return null;
+    final target = idx + delta;
+    if (target < 0 || target >= chapters.length) return null;
+    return chapters[target];
   }
 
   DownloadedChapter? _findDownload(List<DownloadedChapter> list) {
@@ -342,6 +375,42 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ChapterNavButton extends StatelessWidget {
+  const _ChapterNavButton({
+    required this.icon,
+    required this.tooltip,
+    required this.chapter,
+    required this.novel,
+    required this.allChapters,
+    required this.context,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Chapter? chapter;
+  final Novel novel;
+  final List<Chapter> allChapters;
+  final BuildContext context;
+
+  @override
+  Widget build(BuildContext ctx) {
+    return IconButton(
+      tooltip: chapter != null ? '$tooltip: Ch ${chapter!.chapterNumber}' : tooltip,
+      icon: Icon(icon, color: chapter != null ? null : Colors.white24),
+      onPressed: chapter == null
+          ? null
+          : () => context.pushReplacement(
+                '/reader',
+                extra: ReaderArgs(
+                  novel: novel,
+                  chapter: chapter!,
+                  chapters: allChapters,
+                ),
+              ),
     );
   }
 }

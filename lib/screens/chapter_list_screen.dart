@@ -109,6 +109,7 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
                           novel: widget.novel,
                           chapter: chapter,
                           startParagraph: lastPosition?.paragraph,
+                          chapters: List.unmodifiable(_chapters),
                         ),
                       );
                     },
@@ -132,8 +133,14 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
                   isLastRead: isLastRead,
                   download: downloadRecord,
                   onPlay: () {
-                    final args = ReaderArgs(novel: widget.novel, chapter: ch);
-                    context.push('/reader', extra: args);
+                    context.push(
+                      '/reader',
+                      extra: ReaderArgs(
+                        novel: widget.novel,
+                        chapter: ch,
+                        chapters: List.unmodifiable(_chapters),
+                      ),
+                    );
                   },
                   onDownload: () async {
                     final narrator = ref.read(narratorVoiceProvider);

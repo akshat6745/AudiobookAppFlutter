@@ -60,6 +60,7 @@ GoRouter appRouter(WidgetRef ref) {
             novel: args.novel,
             chapter: args.chapter,
             startParagraph: args.startParagraph,
+            chapters: args.chapters,
           );
         },
       ),
@@ -71,9 +72,11 @@ class ReaderArgs {
   final Novel novel;
   final Chapter chapter;
   final int? startParagraph;
+  final List<Chapter> chapters;
   const ReaderArgs({
     required this.novel,
     required this.chapter,
     this.startParagraph,
+    this.chapters = const [],
   });
 }
