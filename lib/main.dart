@@ -116,9 +116,14 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
       theme: buildTheme(),
       routerConfig: _router,
       debugShowCheckedModeBanner: false,
+      // Keep the children list shape stable across rebuilds — falling
+      // back to a const placeholder when `child` is briefly null avoids
+      // child slots shifting (which makes Flutter rebuild/reparent the
+      // BackendPickerOverlayButton between Stack positions and triggers
+      // assertions like `_dependents.isEmpty`).
       builder: (context, child) => Stack(
         children: [
-          ?child,
+          child ?? const SizedBox.shrink(),
           // Pinned bottom-left so the icon stays clear of the usual top
           // action zone (back button, prev/next, download) and clear of
           // the bottom nav + mini player.

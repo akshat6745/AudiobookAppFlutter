@@ -144,9 +144,17 @@ class GlobalMiniPlayer extends ConsumerWidget {
     final novel = s.novel;
     final chapter = s.chapter;
     if (novel == null || chapter == null) return;
-    // No-op if we're already on the reader — avoids redundant push.
-    if (GoRouterState.of(context).uri.path == '/reader') return;
-    context.push('/reader',
-        extra: ReaderArgs(novel: novel, chapter: chapter));
+    final args = ReaderArgs(novel: novel, chapter: chapter);
+    // If we're already on a /reader route, swap it for the *playing*
+    // chapter rather than no-oping (the previous behavior, which made
+    // sense when the reader rendered the audio state's content but
+    // breaks now that each reader screen owns its own display content
+    // — tapping the book icon from a different chapter's reader was
+    // doing nothing). pushReplacement keeps the back stack tidy.
+    if (GoRouterState.of(context).uri.path == '/reader') {
+      context.pushReplacement('/reader', extra: args);
+    } else {
+      context.push('/reader', extra: args);
+    }
   }
 }
