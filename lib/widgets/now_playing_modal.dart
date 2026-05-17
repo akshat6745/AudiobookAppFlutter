@@ -181,6 +181,18 @@ class _TransportRow extends ConsumerWidget {
               icon: const Icon(Icons.skip_next),
               onPressed: coord.playNext,
             ),
+            const SizedBox(width: 8),
+            IconButton(
+              iconSize: 36,
+              tooltip: 'Stop and close',
+              icon: const Icon(Icons.stop_circle_outlined),
+              onPressed: () async {
+                await coord.stop();
+                // Dismiss the modal once playback is fully torn down so
+                // the user lands back on whatever screen was beneath.
+                if (context.mounted) Navigator.of(context).maybePop();
+              },
+            ),
           ],
         );
       },

@@ -11,8 +11,10 @@ import '../models/novel.dart';
 import '../providers/audio_providers.dart';
 import '../providers/download_providers.dart';
 import '../providers/playback_coordinator.dart';
+import '../providers/progress_providers.dart';
 import '../router.dart';
 import '../services/chapter_api.dart';
+import '../services/offline_content_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/global_mini_player.dart';
 
@@ -42,6 +44,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _followMode = false;
   List<Chapter> _localChapters = [];
 
+  /// Chapter content for *this* screen only — independent of whatever the
+  /// audio handler is currently playing. Decoupling the displayed content
+  /// from `audioStateProvider.content` is what fixes the cross-chapter
+  /// highlight bug: when the user navigates between chapters while a
+  /// different chapter is still playing, this screen always shows the
+  /// chapter it was opened with, never the playing chapter's text.
+  List<String> _displayContent = const [];
+  bool _contentLoading = true;
+  Object? _contentError;
+
   @override
   void initState() {
     super.initState();
@@ -49,22 +61,66 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
+  @override
+  void dispose() {
+    // Clear keys eagerly so any stale GlobalKey references can't be
+    // resurrected by a late frame callback after navigation.
+    _itemKeys.clear();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  String get _titleLine =>
+      'Chapter ${widget.chapter.chapterNumber}: ${widget.chapter.chapterTitle}';
+
   Future<void> _init() async {
     if (_initialized) return;
     _initialized = true;
     // Load chapter list in the background so prev/next buttons activate even
     // when the reader is opened from the mini player or downloads screen.
     if (_localChapters.isEmpty) unawaited(_loadChapterList());
-    final coord = ref.read(playbackCoordinatorProvider);
-    await coord.loadChapter(
-      novel: widget.novel,
-      chapter: widget.chapter,
-    );
+
+    await _loadDisplayContent();
+
+    // Once content is loaded, optionally auto-scroll to the start paragraph.
     final start = widget.startParagraph;
     if (start != null && mounted) {
-      // Let the ListView build at least once before we try to locate the target.
       await WidgetsBinding.instance.endOfFrame;
       if (mounted) await _scrollToActive(start);
+    }
+  }
+
+  Future<void> _loadDisplayContent() async {
+    try {
+      // Offline-first lookup, falling back to the network. This is the same
+      // logic the coordinator uses, kept local so the reader can render
+      // without mutating audio state.
+      final offline = await offlineContentService.getOfflineChapterContent(
+        widget.novel.slug,
+        widget.chapter.chapterNumber,
+      );
+      List<String> raw;
+      if (offline != null) {
+        raw = offline.content;
+      } else {
+        final remote = await chapterApi.getChapterContent(
+          chapterNumber: widget.chapter.chapterNumber,
+          novelSlug: widget.novel.slug,
+        );
+        raw = remote.content;
+      }
+      if (!mounted) return;
+      setState(() {
+        _displayContent = [_titleLine, ...raw];
+        _contentLoading = false;
+        _contentError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _contentLoading = false;
+        _contentError = e;
+      });
     }
   }
 
@@ -83,6 +139,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               duration: const Duration(milliseconds: 300), alignment: 0.5);
           return;
         }
+        if (!_scroll.hasClients) return;
         final position = _scroll.position;
         final viewport = position.viewportDimension;
         final avgH = _averageItemHeight();
@@ -113,29 +170,43 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _onUserScroll(ScrollStartNotification n) {
     // Real user drag → exit follow mode and interrupt any auto-scroll.
     if (n.dragDetails != null) {
-      if (_autoScrolling) _scroll.jumpTo(_scroll.offset);
+      if (_autoScrolling && _scroll.hasClients) _scroll.jumpTo(_scroll.offset);
       _autoScrolling = false;
       if (_followMode) setState(() => _followMode = false);
     }
     return false;
   }
 
+  /// True when the audio state's currently-loaded chapter matches the
+  /// chapter this screen is displaying. Highlights, follow-mode scrolling,
+  /// and the "now playing" indicator all gate on this so audio belonging
+  /// to a different chapter never paints onto this screen.
+  bool _isPlayingThisChapter(AudioState state) {
+    return state.novel?.slug == widget.novel.slug &&
+        state.chapter?.chapterNumber == widget.chapter.chapterNumber;
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(audioStateProvider);
-    final content = state.content;
+    final isThisChapter = _isPlayingThisChapter(state);
 
-    // Follow mode: auto-scroll to active paragraph whenever it changes, but
-    // only while the user has opted in via the AppBar button.
-    ref.listen(audioStateProvider, (prev, next) {
+    // Follow mode: auto-scroll to active paragraph whenever it changes,
+    // but only while (a) the user has opted in via the AppBar button AND
+    // (b) the audio state's chapter matches this screen — otherwise an
+    // auto-advance in a different chapter would scroll our paragraphs.
+    ref.listen<AudioState>(audioStateProvider, (prev, next) {
       if (!_followMode) return;
+      if (!_isPlayingThisChapter(next)) return;
       if (prev?.currentIndex == next.currentIndex) return;
       final idx = next.currentIndex;
       if (idx == null) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToActive(idx));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToActive(idx);
+      });
     });
 
-    final hasPlaying = state.currentIndex != null;
+    final hasPlaying = isThisChapter && state.currentIndex != null;
 
     final downloads = ref.watch(downloadsProvider);
     final downloadRecord = _findDownload(downloads.items);
@@ -180,7 +251,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 final idx = state.currentIndex;
                 if (idx == null) return;
                 if (_followMode) {
-                  // Second tap exits follow mode (no scroll).
                   setState(() => _followMode = false);
                 } else {
                   setState(() => _followMode = true);
@@ -191,7 +261,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           IconButton(
             tooltip: downloaded
                 ? 'Downloaded for offline playback'
-                : (downloading ? 'Downloading…' : 'Download for offline'),
+                : (downloading ? 'Downloading\u2026' : 'Download for offline'),
             icon: Icon(
               downloaded
                   ? Icons.check_circle
@@ -210,54 +280,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       ),
       body: Stack(
         children: [
-          content.isEmpty
-              ? const Center(child: CircularProgressIndicator())
-              : NotificationListener<ScrollStartNotification>(
-              onNotification: _onUserScroll,
-              child: ListView.builder(
-              controller: _scroll,
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-              itemCount: content.length,
-              itemBuilder: (_, index) {
-                final key = _itemKeys.putIfAbsent(index, () => GlobalKey());
-                final isActive = state.currentIndex == index;
-                final isTitle = index == 0;
-                return Container(
-                  key: key,
-                  margin: const EdgeInsets.symmetric(vertical: 6),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: isActive
-                        ? AppColors.primary.withOpacity(0.12)
-                        : AppColors.cardDark,
-                    borderRadius: BorderRadius.circular(8),
-                    border: isActive
-                        ? const Border(
-                            left: BorderSide(
-                                color: AppColors.primary, width: 3),
-                          )
-                        : null,
-                  ),
-                  child: InkWell(
-                    onTap: () {
-                      ref
-                          .read(playbackCoordinatorProvider)
-                          .playParagraph(index);
-                    },
-                    child: Text(
-                      content[index],
-                      style: TextStyle(
-                        fontSize: isTitle ? _fontSize + 6 : _fontSize,
-                        fontWeight:
-                            isTitle ? FontWeight.bold : FontWeight.normal,
-                        height: 1.5,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          _buildBody(state, isThisChapter),
           const Align(
             alignment: Alignment.bottomCenter,
             child: GlobalMiniPlayer(),
@@ -265,6 +288,109 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildBody(AudioState state, bool isThisChapter) {
+    if (_contentLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_contentError != null && _displayContent.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline,
+                  color: AppColors.accent, size: 32),
+              const SizedBox(height: 12),
+              Text(
+                'Could not load chapter:\n$_contentError',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  setState(() {
+                    _contentLoading = true;
+                    _contentError = null;
+                  });
+                  _loadDisplayContent();
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return NotificationListener<ScrollStartNotification>(
+      onNotification: _onUserScroll,
+      child: ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+        itemCount: _displayContent.length,
+        itemBuilder: (_, index) {
+          final key = _itemKeys.putIfAbsent(index, () => GlobalKey());
+          // Highlight ONLY when the audio state belongs to this chapter
+          // AND the active index matches. This is the core fix for the
+          // stale-highlight-across-chapters bug.
+          final isActive =
+              isThisChapter && state.currentIndex == index;
+          final isTitle = index == 0;
+          return Container(
+            key: key,
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? AppColors.primary.withOpacity(0.12)
+                  : AppColors.cardDark,
+              borderRadius: BorderRadius.circular(8),
+              border: isActive
+                  ? const Border(
+                      left: BorderSide(
+                          color: AppColors.primary, width: 3),
+                    )
+                  : null,
+            ),
+            child: InkWell(
+              onTap: () => _onParagraphTap(index),
+              child: Text(
+                _displayContent[index],
+                style: TextStyle(
+                  fontSize: isTitle ? _fontSize + 6 : _fontSize,
+                  fontWeight:
+                      isTitle ? FontWeight.bold : FontWeight.normal,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _onParagraphTap(int index) async {
+    // Strip the prepended title line (index 0) before passing the
+    // paragraph list to the coordinator — the coordinator re-adds the
+    // title in `loadChapter`, matching the offline-audio off-by-one
+    // mapping (paragraph 0 → title.mp3).
+    final paragraphs = _displayContent.length > 1
+        ? _displayContent.sublist(1)
+        : <String>[];
+    await ref.read(playbackCoordinatorProvider).playChapterParagraph(
+          novel: widget.novel,
+          chapter: widget.chapter,
+          paragraphIndex: index,
+          content: paragraphs,
+        );
+    // Refresh server progress so the chapter list / novel list reflect
+    // the latest cross-device state shortly after we kick off playback.
+    if (mounted) {
+      ref.read(progressProvider.notifier).refresh();
+    }
   }
 
   Future<void> _loadChapterList() async {

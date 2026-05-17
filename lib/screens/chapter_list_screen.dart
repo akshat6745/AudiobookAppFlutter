@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -24,141 +25,244 @@ class ChapterListScreen extends ConsumerStatefulWidget {
 }
 
 class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
-  final List<Chapter> _chapters = [];
-  int _page = 1;
+  /// Cached pages — `Map<page number, chapters on that page>`. Keeping this
+  /// in memory means flipping back to a previously-viewed page is instant
+  /// and we don't lose what we've already paid network cost for.
+  final Map<int, List<Chapter>> _pageCache = {};
+
+  /// Persists scroll offsets per-page so the user returns to where they
+  /// were inside a page after going prev/next/jump and coming back.
+  final Map<int, double> _scrollOffsetByPage = {};
+  final ScrollController _scroll = ScrollController();
+
+  int _currentPage = 1;
   int _totalPages = 1;
   bool _isLoading = false;
+  Object? _error;
+
+  /// Suppress the persistence listener during page transitions. Without
+  /// this, the listener fires while the new page's ListView lays out
+  /// (briefly reporting offset 0) and clobbers the saved offset before
+  /// our restore frame callback runs.
+  bool _suppressOffsetPersist = false;
 
   @override
   void initState() {
     super.initState();
-    _loadMore();
+    _scroll.addListener(_persistScrollOffset);
+    _loadPage(1);
+    // Refresh server-side progress when entering this screen so the
+    // "last read" badge / Continue Reading card reflect cross-device state.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(progressProvider.notifier).refreshNovel(widget.novel.slug);
+    });
   }
 
-  Future<void> _loadMore() async {
-    if (_isLoading || _page > _totalPages) return;
-    setState(() => _isLoading = true);
+  @override
+  void dispose() {
+    _scroll.removeListener(_persistScrollOffset);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _persistScrollOffset() {
+    if (_suppressOffsetPersist) return;
+    if (!_scroll.hasClients) return;
+    _scrollOffsetByPage[_currentPage] = _scroll.offset;
+  }
+
+  Future<void> _loadPage(int page) async {
+    if (_isLoading) return;
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
     try {
-      final resp = await chapterApi.getChaptersList(
-        widget.novel.slug,
-        page: _page,
-      );
+      final cached = _pageCache[page];
+      ChapterListResponse? resp;
+      if (cached == null) {
+        resp = await chapterApi.getChaptersList(
+          widget.novel.slug,
+          page: page,
+        );
+        _pageCache[page] = resp.chapters;
+      }
+
+      if (!mounted) return;
+      _suppressOffsetPersist = true;
       setState(() {
-        _chapters.addAll(resp.chapters);
-        _totalPages = resp.totalPages;
-        _page++;
+        _currentPage = page;
+        if (resp != null) {
+          _totalPages = resp.totalPages;
+        }
         _isLoading = false;
       });
-    } catch (_) {
-      setState(() => _isLoading = false);
+
+      // Restore the scroll offset we left this page at, after the new
+      // ListView has had a chance to lay out its children.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try {
+          if (!mounted || !_scroll.hasClients) return;
+          final saved = _scrollOffsetByPage[page] ?? 0.0;
+          final clamped =
+              saved.clamp(0.0, _scroll.position.maxScrollExtent);
+          _scroll.jumpTo(clamped);
+        } finally {
+          _suppressOffsetPersist = false;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _suppressOffsetPersist = false;
+      setState(() {
+        _isLoading = false;
+        _error = e;
+      });
     }
+  }
+
+  Future<void> _goToPage(int page) async {
+    if (page < 1 || page > _totalPages) return;
+    if (page == _currentPage) return;
+    _persistScrollOffset();
+    await _loadPage(page);
+  }
+
+  Future<void> _showJumpToPageDialog() async {
+    final controller =
+        TextEditingController(text: _currentPage.toString());
+    final formKey = GlobalKey<FormState>();
+    final result = await showDialog<int?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Go to page'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: InputDecoration(
+              labelText: 'Page (1\u2013$_totalPages)',
+              border: const OutlineInputBorder(),
+            ),
+            validator: (v) {
+              final n = int.tryParse(v ?? '');
+              if (n == null) return 'Enter a page number';
+              if (n < 1 || n > _totalPages) {
+                return 'Out of range (1\u2013$_totalPages)';
+              }
+              return null;
+            },
+            onFieldSubmitted: (_) {
+              if (formKey.currentState!.validate()) {
+                Navigator.of(ctx).pop(int.parse(controller.text));
+              }
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.of(ctx).pop(int.parse(controller.text));
+              }
+            },
+            child: const Text('Go'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result != null) await _goToPage(result);
   }
 
   @override
   Widget build(BuildContext context) {
-    final lastChapter = ref.watch(progressProvider)[widget.novel.slug];
+    final progress = ref.watch(progressProvider);
+    final lastChapter = progress[widget.novel.slug];
     final downloads = ref.watch(downloadsProvider);
     final lastPosition = ref.watch(lastPositionProvider)[widget.novel.slug];
 
-    // Show a "Continue Reading" card when we know the last-read chapter —
-    // either from the server progress API or from the richer client-side
-    // position tracker (which also has paragraph info).
+    final chapters = _pageCache[_currentPage] ?? const <Chapter>[];
+
     final hasLastRead = lastPosition != null || lastChapter != null;
-    final totalCount = _chapters.length + (hasLastRead ? 1 : 0) + 1;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.novel.title)),
+      appBar: AppBar(
+        title: Text(widget.novel.title),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh progress',
+            icon: const Icon(Icons.refresh),
+            onPressed: () async {
+              await ref
+                  .read(progressProvider.notifier)
+                  .refreshNovel(widget.novel.slug, force: true);
+              // Also drop the page cache so the chapter list itself
+              // refetches if the backend has new chapters.
+              if (!mounted) return;
+              setState(() {
+                _pageCache.clear();
+                _scrollOffsetByPage.clear();
+              });
+              await _loadPage(_currentPage);
+            },
+          ),
+        ],
+      ),
       body: Stack(
         children: [
-          NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              if (n.metrics.pixels > n.metrics.maxScrollExtent - 300) {
-                _loadMore();
-              }
-              return false;
-            },
-            child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: 120),
-              itemCount: totalCount,
-              itemBuilder: (_, i) {
-                if (hasLastRead && i == 0) {
-                  // Prefer client-side position (has paragraph), fall back
-                  // to server progress API (chapter only).
-                  final chNum = lastPosition?.chapter ?? lastChapter!;
-                  final chapter = _chapters.isEmpty
-                      ? Chapter(
+          Column(
+            children: [
+              if (hasLastRead)
+                _ContinueReadingCard(
+                  novel: widget.novel,
+                  position: lastPosition,
+                  chapterNumber: lastPosition?.chapter ?? lastChapter!,
+                  chapterTitle: _resolveChapterTitle(
+                    lastPosition?.chapter ?? lastChapter!,
+                  ),
+                  onTap: () {
+                    final chNum = lastPosition?.chapter ?? lastChapter!;
+                    final chapter = _findChapter(chNum) ??
+                        Chapter(
                           chapterNumber: chNum,
                           chapterTitle: 'Chapter $chNum',
-                        )
-                      : _chapters.firstWhere(
-                          (c) => c.chapterNumber == chNum,
-                          orElse: () => Chapter(
-                            chapterNumber: chNum,
-                            chapterTitle: 'Chapter $chNum',
-                          ),
                         );
-                  return _ContinueReadingCard(
-                    novel: widget.novel,
-                    position: lastPosition,
-                    chapterNumber: chNum,
-                    chapterTitle: chapter.chapterTitle,
-                    onTap: () {
-                      context.push(
-                        '/reader',
-                        extra: ReaderArgs(
-                          novel: widget.novel,
-                          chapter: chapter,
-                          startParagraph: lastPosition?.paragraph,
-                          chapters: List.unmodifiable(_chapters),
-                        ),
-                      );
-                    },
-                  );
-                }
-                final chapterIndex = i - (hasLastRead ? 1 : 0);
-                if (chapterIndex >= _chapters.length) {
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: _isLoading
-                        ? const Center(child: CircularProgressIndicator())
-                        : const SizedBox.shrink(),
-                  );
-                }
-                final ch = _chapters[chapterIndex];
-                final isLastRead = lastChapter == ch.chapterNumber;
-                final downloadRecord = _findDownload(downloads.items, ch);
-                return _ChapterTile(
-                  novel: widget.novel,
-                  chapter: ch,
-                  isLastRead: isLastRead,
-                  download: downloadRecord,
-                  onPlay: () {
+                    final all = _allLoadedChapters();
                     context.push(
                       '/reader',
                       extra: ReaderArgs(
                         novel: widget.novel,
-                        chapter: ch,
-                        chapters: List.unmodifiable(_chapters),
+                        chapter: chapter,
+                        startParagraph: lastPosition?.paragraph,
+                        chapters: List.unmodifiable(all),
                       ),
                     );
                   },
-                  onDownload: () async {
-                    final narrator = ref.read(narratorVoiceProvider);
-                    final dialogue = ref.read(dialogueVoiceProvider);
-                    await ref
-                        .read(downloadsProvider.notifier)
-                        .startDownload(
-                          DownloadRequest(
-                            novelName: widget.novel.slug,
-                            chapterNumber: ch.chapterNumber,
-                            narratorVoice: narrator,
-                            dialogueVoice: dialogue,
-                          ),
-                        );
-                  },
-                );
-              },
-            ),
+                ),
+              Expanded(
+                child: _buildList(chapters, lastChapter, downloads.items),
+              ),
+              _PaginationBar(
+                currentPage: _currentPage,
+                totalPages: _totalPages,
+                isLoading: _isLoading,
+                onPrev: _currentPage > 1
+                    ? () => _goToPage(_currentPage - 1)
+                    : null,
+                onNext: _currentPage < _totalPages
+                    ? () => _goToPage(_currentPage + 1)
+                    : null,
+                onJump: _totalPages > 1 ? _showJumpToPageDialog : null,
+              ),
+            ],
           ),
           const Align(
             alignment: Alignment.bottomCenter,
@@ -167,6 +271,107 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildList(
+    List<Chapter> chapters,
+    int? lastChapter,
+    List<DownloadedChapter> downloads,
+  ) {
+    if (_isLoading && chapters.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && chapters.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline,
+                  color: AppColors.accent, size: 32),
+              const SizedBox(height: 12),
+              Text(
+                'Could not load chapters:\n$_error',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => _loadPage(_currentPage),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (chapters.isEmpty) {
+      return const Center(child: Text('No chapters on this page.'));
+    }
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.only(bottom: 8),
+      itemCount: chapters.length,
+      itemBuilder: (_, i) {
+        final ch = chapters[i];
+        final isLastRead = lastChapter == ch.chapterNumber;
+        final downloadRecord = _findDownload(downloads, ch);
+        return _ChapterTile(
+          novel: widget.novel,
+          chapter: ch,
+          isLastRead: isLastRead,
+          download: downloadRecord,
+          onPlay: () {
+            final all = _allLoadedChapters();
+            context.push(
+              '/reader',
+              extra: ReaderArgs(
+                novel: widget.novel,
+                chapter: ch,
+                chapters: List.unmodifiable(all),
+              ),
+            );
+          },
+          onDownload: () async {
+            final narrator = ref.read(narratorVoiceProvider);
+            final dialogue = ref.read(dialogueVoiceProvider);
+            await ref.read(downloadsProvider.notifier).startDownload(
+                  DownloadRequest(
+                    novelName: widget.novel.slug,
+                    chapterNumber: ch.chapterNumber,
+                    narratorVoice: narrator,
+                    dialogueVoice: dialogue,
+                  ),
+                );
+          },
+        );
+      },
+    );
+  }
+
+  /// Aggregate every chapter we've fetched so far across all loaded pages.
+  /// We pass this to ReaderScreen so prev/next chapter buttons work even
+  /// across page boundaries.
+  List<Chapter> _allLoadedChapters() {
+    final all = <Chapter>[
+      for (final entry in _pageCache.entries) ...entry.value,
+    ];
+    all.sort((a, b) => a.chapterNumber.compareTo(b.chapterNumber));
+    return all;
+  }
+
+  Chapter? _findChapter(int number) {
+    for (final list in _pageCache.values) {
+      for (final c in list) {
+        if (c.chapterNumber == number) return c;
+      }
+    }
+    return null;
+  }
+
+  String _resolveChapterTitle(int number) {
+    final c = _findChapter(number);
+    return c?.chapterTitle ?? 'Chapter $number';
   }
 
   DownloadedChapter? _findDownload(
@@ -182,6 +387,89 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
     } catch (_) {
       return null;
     }
+  }
+}
+
+class _PaginationBar extends StatelessWidget {
+  const _PaginationBar({
+    required this.currentPage,
+    required this.totalPages,
+    required this.isLoading,
+    required this.onPrev,
+    required this.onNext,
+    required this.onJump,
+  });
+
+  final int currentPage;
+  final int totalPages;
+  final bool isLoading;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+  final VoidCallback? onJump;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        // Lift the bar above the persistent mini-player. The mini-player
+        // also reserves SafeArea bottom inset so this offset matches.
+        margin: const EdgeInsets.only(bottom: 80),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark,
+          border: Border(
+            top: BorderSide(color: Colors.white.withOpacity(0.06)),
+          ),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Previous page',
+              icon: const Icon(Icons.chevron_left),
+              onPressed: isLoading ? null : onPrev,
+            ),
+            Expanded(
+              child: GestureDetector(
+                onTap: onJump,
+                behavior: HitTestBehavior.opaque,
+                child: Center(
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Page $currentPage of $totalPages',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            if (onJump != null)
+                              const Icon(
+                                Icons.edit,
+                                size: 14,
+                                color: AppColors.textMuted,
+                              ),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Next page',
+              icon: const Icon(Icons.chevron_right),
+              onPressed: isLoading ? null : onNext,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -234,7 +522,7 @@ class _ContinueReadingCard extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 position != null
-                    ? 'Chapter $chapterNumber · Paragraph ${position!.paragraph}'
+                    ? 'Chapter $chapterNumber \u00b7 Paragraph ${position!.paragraph}'
                     : 'Chapter $chapterNumber: $chapterTitle',
                 style: const TextStyle(
                   fontSize: 14,

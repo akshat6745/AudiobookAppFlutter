@@ -18,10 +18,15 @@ class AudiobookCallbacks {
   /// Called when the "previous" media action is triggered.
   final Future<void> Function()? onRemotePrevious;
 
+  /// Called when the OS stop control (notification swipe / remote stop)
+  /// is invoked. Coordinator should reset UI state to match.
+  final Future<void> Function()? onRemoteStop;
+
   const AudiobookCallbacks({
     this.onAutoAdvance,
     this.onRemoteNext,
     this.onRemotePrevious,
+    this.onRemoteStop,
   });
 }
 
@@ -45,6 +50,11 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
   /// Guards against multiple completion triggers for the same paragraph.
   int? _lastCompletedIndex;
+
+  /// Re-entrancy guard for [stop] — when the coordinator initiates a stop
+  /// it sets this so the handler doesn't fire `onRemoteStop` back into the
+  /// coordinator (which would loop).
+  bool _suppressRemoteStop = false;
 
   AudiobookHandler({required this.cache}) {
     _wireStreams();
@@ -142,8 +152,54 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
+    // Track whether this stop originated from a remote/notification action
+    // so we can fire the coordinator callback exactly once.
+    final wasActive = _currentIndex != null;
+    // Reset state up-front so any in-flight stream events that fire during
+    // teardown don't re-trigger auto-advance against a stale index.
+    _currentIndex = null;
+    _lastCompletedIndex = null;
+    _paragraphs = const [];
     await _player.stop();
+    // Drop the current MediaItem so the OS notification / lock-screen
+    // controls can be dismissed cleanly.
+    mediaItem.add(null);
+    // Push an explicit idle state so platform UI (notification, widget,
+    // mini-player StreamBuilders) all flip to "not playing" immediately.
+    playbackState.add(
+      PlaybackState(
+        controls: const [],
+        systemActions: const {},
+        processingState: AudioProcessingState.idle,
+        playing: false,
+        updatePosition: Duration.zero,
+        speed: _playbackSpeed,
+      ),
+    );
     await super.stop();
+
+    // Notify the coordinator if this came from outside (notification stop,
+    // remote command). The coordinator uses this to reset the UI-facing
+    // audio state. Guarded by `wasActive` and `_suppressRemoteStop` so
+    // coordinator-initiated stops don't loop back into themselves.
+    if (wasActive &&
+        !_suppressRemoteStop &&
+        _callbacks.onRemoteStop != null) {
+      await _callbacks.onRemoteStop!();
+    }
+  }
+
+  /// Coordinator-driven stop. Skips the `onRemoteStop` callback (the
+  /// coordinator already knows it initiated the stop). Use this from the
+  /// app's UI/coordinator path; reserve [stop] for OS / notification
+  /// triggers where we need to bubble the event back up.
+  Future<void> stopFromCoordinator() async {
+    _suppressRemoteStop = true;
+    try {
+      await stop();
+    } finally {
+      _suppressRemoteStop = false;
+    }
   }
 
   @override

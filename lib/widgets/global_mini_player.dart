@@ -123,6 +123,13 @@ class GlobalMiniPlayer extends ConsumerWidget {
                       icon: const Icon(Icons.skip_next),
                       onPressed: coord.playNext,
                     ),
+                    IconButton(
+                      tooltip: 'Stop and close player',
+                      icon: const Icon(Icons.close),
+                      // Full stop: tears down MediaSession + notification,
+                      // resets paragraph highlight, hides mini player.
+                      onPressed: coord.stop,
+                    ),
                   ],
                 ),
               );

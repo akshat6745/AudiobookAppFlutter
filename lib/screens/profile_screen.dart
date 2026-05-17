@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/auth_providers.dart';
+import '../providers/backend_provider.dart';
 import '../providers/progress_providers.dart';
 import '../theme/app_theme.dart';
+import '../widgets/backend_picker.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -13,6 +15,7 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authProvider).user ?? '—';
     final progress = ref.watch(progressProvider);
+    final backend = ref.watch(backendProvider);
 
     return SafeArea(
       child: ListView(
@@ -49,6 +52,12 @@ class ProfileScreen extends ConsumerWidget {
                     subtitle: Text('Last read: Chapter ${e.value}'),
                   ),
                 )),
+          const SizedBox(height: 24),
+          OutlinedButton.icon(
+            onPressed: () => showBackendPicker(context),
+            icon: const Icon(Icons.dns),
+            label: Text('Backend: ${backend.label}'),
+          ),
           const SizedBox(height: 24),
           FilledButton.tonal(
             onPressed: () async {

@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -13,8 +14,13 @@ import 'screens/profile_screen.dart';
 import 'screens/reader_screen.dart';
 import 'screens/register_screen.dart';
 
+/// Exposed so the global backend-picker overlay (which lives above the
+/// router in `MaterialApp.builder`) can grab a Navigator context.
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 GoRouter appRouter(WidgetRef ref) {
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: '/novels',
     redirect: (context, state) {
       final user = ref.read(authProvider).user;

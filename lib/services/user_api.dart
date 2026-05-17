@@ -46,6 +46,34 @@ class UserApi {
         .map((e) => UserProgress.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
+
+  /// Per-novel progress lookup. Used when only one novel's progress needs
+  /// to be refreshed (cheaper than the full list endpoint).
+  Future<UserProgress?> getNovelProgress({
+    required String username,
+    required String novelSlug,
+  }) async {
+    try {
+      final res = await apiClient.get(
+        '/user/progress/${Uri.encodeComponent(novelSlug)}',
+        queryParameters: {'username': username},
+      );
+      final data = res.data;
+      if (data is Map<String, dynamic>) {
+        // Backend sometimes wraps the row, sometimes returns it bare.
+        final inner = data['progress'];
+        if (inner is Map<String, dynamic>) {
+          return UserProgress.fromJson(inner);
+        }
+        if (data.containsKey('lastChapterRead')) {
+          return UserProgress.fromJson(data);
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 final userApi = UserApi();

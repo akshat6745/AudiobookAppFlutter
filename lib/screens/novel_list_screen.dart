@@ -25,6 +25,18 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
   String _query = '';
 
   @override
+  void initState() {
+    super.initState();
+    // Refresh server-side progress when this tab becomes visible so the
+    // "Ch. N" last-read badge reflects cross-device state. The provider
+    // throttles, so frequent tab switches won't spam the backend.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(progressProvider.notifier).refresh();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final async = ref.watch(_novelsFutureProvider);
     final progress = ref.watch(progressProvider);
@@ -100,8 +112,16 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
                 }
 
                 return RefreshIndicator(
-                  onRefresh: () =>
+                  onRefresh: () async {
+                    // Pull-to-refresh on the novel list also forces a
+                    // progress refresh so badges update immediately.
+                    await Future.wait([
                       ref.refresh(_novelsFutureProvider.future),
+                      ref
+                          .read(progressProvider.notifier)
+                          .refresh(force: true),
+                    ]);
+                  },
                   child: ListView.builder(
                     padding: const EdgeInsets.only(bottom: 100),
                     itemCount: filtered.length,
