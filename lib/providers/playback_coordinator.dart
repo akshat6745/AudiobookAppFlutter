@@ -108,6 +108,13 @@ class PlaybackCoordinator {
     if (alreadyLoaded) {
       prepared = current.content;
     } else {
+      // Silence whatever is currently playing immediately — before resolving
+      // content or touching the cache/handler — so a chapter switch can never
+      // leave old audio audible while the new chapter loads. `pause` (not
+      // `stop`) keeps the MediaSession alive; `setParagraphs` below is what
+      // actually starts the new session (bumps the handler's generation).
+      await _handler.pause();
+
       final content = initialContent ?? await _resolveContent(novel, chapter);
       // Client-side convention: content[0] is the chapter title.
       final titleLine = 'Chapter ${chapter.chapterNumber}: ${chapter.chapterTitle}';

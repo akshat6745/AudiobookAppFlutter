@@ -269,6 +269,167 @@ void main() {
           reason: 'no-op update should not clear cache');
     });
   });
+
+  group('chapter switch — session safety (regression for the audio-leak bug)',
+      () {
+    test(
+        'audio generated for a previous chapter never leaks into the new '
+        'chapter at the same paragraph index', () async {
+      final engine = FakeTtsEngine(delay: const Duration(milliseconds: 50));
+      final cache = _makeCache(tmpDir: tmpDir, engine: engine);
+
+      cache.setContext('novel-slug', 5);
+      final ch5Paras = _paragraphs(count: 5, charsEach: 100);
+      // Kick off a slow load for chapter 5, paragraph 2 — don't await it.
+      final ch5Future = cache.getAudio(
+        paragraphIndex: 2,
+        paragraphText: ch5Paras[2],
+        allParagraphs: ch5Paras,
+      );
+
+      // Switch chapters before the chapter-5 load finishes.
+      cache.setContext('novel-slug', 6);
+      final ch6Paras = _paragraphs(count: 5, charsEach: 100);
+
+      // Request the same index (2) under chapter 6 — must synthesize fresh
+      // chapter-6 audio, never chapter 5's late-resolving result.
+      final ch6Result = await cache.getAudio(
+        paragraphIndex: 2,
+        paragraphText: ch6Paras[2],
+        allParagraphs: ch6Paras,
+      );
+
+      expect(ch6Result, isNotNull);
+      expect(ch6Result!.paragraphText, ch6Paras[2]);
+
+      // The chapter-5 request must resolve (not hang) even though its
+      // session was torn down mid-flight — it should discard, not error out
+      // the caller.
+      final ch5Result = await ch5Future;
+      expect(ch5Result, isNull,
+          reason: 'a request from a torn-down session resolves to null, '
+              'never to (possibly mismatched) audio');
+
+      // Re-querying chapter 6 index 2 must still be chapter 6's audio.
+      final again = await cache.getAudio(
+        paragraphIndex: 2,
+        paragraphText: ch6Paras[2],
+        allParagraphs: ch6Paras,
+      );
+      expect(again!.paragraphText, ch6Paras[2]);
+    });
+
+    test(
+        "a preload started for the previous chapter never populates the "
+        "new chapter's cache at the same index", () async {
+      final engine = FakeTtsEngine();
+      final cache =
+          _makeCache(tmpDir: tmpDir, engine: engine, preloadThreshold: 5000);
+      cache.setContext('novel-slug', 1);
+      final ch1Paras = _paragraphs(count: 10, charsEach: 100);
+
+      await cache.getAudio(
+          paragraphIndex: 0,
+          paragraphText: ch1Paras[0],
+          allParagraphs: ch1Paras);
+      // A preload for chapter-1 paragraph 1 may now be in flight.
+
+      // Switch chapters immediately, before that preload settles.
+      cache.setContext('novel-slug', 2);
+      final ch2Paras = _paragraphs(count: 10, charsEach: 100);
+
+      // Let any in-flight chapter-1 work settle.
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Chapter 2's index 1 must not appear "ready" just because a stale
+      // chapter-1 preload wrote to it.
+      expect(cache.isAudioReady(1), isFalse,
+          reason: 'index 1 must require a fresh synthesis under the new '
+              'chapter, not inherit chapter 1\'s cached audio');
+
+      final result = await cache.getAudio(
+          paragraphIndex: 1,
+          paragraphText: ch2Paras[1],
+          allParagraphs: ch2Paras);
+      expect(result!.paragraphText, ch2Paras[1]);
+    });
+
+    test(
+        'a cache hit with mismatched paragraph text triggers a fresh '
+        'synthesis instead of returning stale content', () async {
+      final engine = FakeTtsEngine();
+      final cache = _makeCache(tmpDir: tmpDir, engine: engine);
+      cache.setContext('novel-slug', 1);
+      final paras = _paragraphs();
+
+      await cache.getAudio(
+          paragraphIndex: 0, paragraphText: paras[0], allParagraphs: paras);
+      expect(engine.synthesized, [paras[0]]);
+
+      // Same index, different text (e.g. the chapter content changed) — must
+      // not silently return the old audio.
+      const newText = 'completely different paragraph text';
+      final result = await cache.getAudio(
+          paragraphIndex: 0, paragraphText: newText, allParagraphs: paras);
+
+      expect(result!.paragraphText, newText);
+      expect(engine.synthesized, contains(newText));
+    });
+
+    test(
+        'switching chapters fails in-flight requests so their awaiters '
+        'resolve instead of hanging', () async {
+      final engine = FakeTtsEngine(delay: const Duration(milliseconds: 200));
+      final cache = _makeCache(tmpDir: tmpDir, engine: engine);
+      cache.setContext('novel-slug', 1);
+      final ch1Paras = _paragraphs();
+
+      final pending = cache.getAudio(
+          paragraphIndex: 0,
+          paragraphText: ch1Paras[0],
+          allParagraphs: ch1Paras);
+
+      // Switch before the slow synth resolves.
+      await Future.delayed(const Duration(milliseconds: 10));
+      cache.setContext('novel-slug', 2);
+
+      // The original request must resolve (not hang forever) even though
+      // its session was torn down mid-flight.
+      final result = await pending.timeout(const Duration(seconds: 2));
+      expect(result, isNull);
+    });
+
+    test(
+        'the same paragraph index in two different chapters caches '
+        'independently and never collides', () async {
+      final engine = FakeTtsEngine();
+      final cache = _makeCache(tmpDir: tmpDir, engine: engine);
+
+      cache.setContext('novel-slug', 1);
+      final ch1Paras = _paragraphs(count: 3, charsEach: 60);
+      await cache.getAudio(
+          paragraphIndex: 0,
+          paragraphText: ch1Paras[0],
+          allParagraphs: ch1Paras);
+
+      cache.setContext('novel-slug', 2);
+      // isAudioReady is scoped to the *current* context (chapter 2), so the
+      // chapter-1 entry at the same index must not be visible here.
+      expect(cache.isAudioReady(0), isFalse);
+
+      final ch2Paras = _paragraphs(count: 3, charsEach: 60);
+      final result = await cache.getAudio(
+          paragraphIndex: 0,
+          paragraphText: ch2Paras[0],
+          allParagraphs: ch2Paras);
+      expect(result!.paragraphText, ch2Paras[0]);
+
+      // Switching back to chapter 1 must still see its own (still-valid)
+      // cached entry rather than chapter 2's.
+      cache.setContext('novel-slug', 1);
+      expect(cache.isAudioReady(0), isTrue);
+    });
+  });
 }
 
 class _DisposableEngine extends TtsEngine {

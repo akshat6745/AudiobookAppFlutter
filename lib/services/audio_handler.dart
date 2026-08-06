@@ -51,6 +51,13 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   /// Guards against multiple completion triggers for the same paragraph.
   int? _lastCompletedIndex;
 
+  /// Bumped by [setParagraphs] (new chapter loaded) and [stop]. [playParagraph]
+  /// captures this on entry and re-checks it after every `await` — a mismatch
+  /// means a chapter switch (or stop) happened while this call was in flight,
+  /// so its result is discarded instead of being played. This is what stops
+  /// audio from a stale request ever reaching the player.
+  int _generation = 0;
+
   /// Re-entrancy guard for [stop] — when the coordinator initiates a stop
   /// it sets this so the handler doesn't fire `onRemoteStop` back into the
   /// coordinator (which would loop).
@@ -76,20 +83,36 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     _callbacks = callbacks;
   }
 
+  /// Called whenever the coordinator loads a (new) chapter's paragraphs.
+  /// Starts a new playback session: bumps the generation and atomically
+  /// resets the index/completion state so a stale auto-advance or in-flight
+  /// [playParagraph] call from the previous chapter can never act on the new
+  /// one.
   void setParagraphs(List<String> paragraphs) {
+    _generation++;
     _paragraphs = paragraphs;
+    _currentIndex = null;
+    _lastCompletedIndex = null;
   }
 
   int? get currentIndex => _currentIndex;
   double get playbackSpeed => _playbackSpeed;
 
   /// Play a specific paragraph. Resolves audio via the cache manager then
-  /// swaps the just_audio source. Idempotent-ish: calling with the same index
-  /// while it's still loading will early-return.
+  /// swaps the just_audio source.
+  ///
+  /// Session-safe: captures the current generation and the requested index
+  /// up front, then re-validates both after every `await`. If a chapter
+  /// switch happened ([setParagraphs]/[stop] bumped the generation) or a
+  /// newer `playParagraph` call has since taken over `_currentIndex` while
+  /// this call was awaiting, it bails out without touching the player —
+  /// the most recent request always wins, and a late-resolving stale one
+  /// can never play its audio over the current session.
   Future<bool> playParagraph({
     required int paragraphIndex,
     required String paragraphText,
   }) async {
+    final gen = _generation;
     try {
       _currentIndex = paragraphIndex;
       _lastCompletedIndex = null;
@@ -100,6 +123,8 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
         paragraphText: paragraphText,
         allParagraphs: _paragraphs,
       );
+
+      if (!_isCurrent(gen, paragraphIndex)) return false;
 
       if (audio == null || !audio.isValid) {
         _emitPlaybackState(isLoading: false);
@@ -121,7 +146,6 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
         artUri: _artworkUri != null ? Uri.parse(_artworkUri!) : null,
         duration: audio.duration,
       );
-      this.mediaItem.add(mediaItem);
 
       // Use AudioSource.uri so the same code path handles local file paths
       // (mobile/desktop) and data:/http: URIs (web).
@@ -130,10 +154,16 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           : Uri.file(audioUri);
       await _player.setAudioSource(AudioSource.uri(uri));
 
+      if (!_isCurrent(gen, paragraphIndex)) return false;
+
+      this.mediaItem.add(mediaItem);
+
       if (!_rateApplied) {
         await _player.setSpeed(_playbackSpeed);
         _rateApplied = true;
       }
+
+      if (!_isCurrent(gen, paragraphIndex)) return false;
 
       cache.setCurrentlyPlaying(paragraphIndex);
       await _player.play();
@@ -143,6 +173,12 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
       return false;
     }
   }
+
+  /// Whether [gen]/[paragraphIndex] still describe the session and request
+  /// this call was made for — false means a newer chapter or a newer
+  /// `playParagraph` call has since taken over.
+  bool _isCurrent(int gen, int paragraphIndex) =>
+      gen == _generation && _currentIndex == paragraphIndex;
 
   @override
   Future<void> play() => _player.play();
@@ -155,8 +191,10 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // Track whether this stop originated from a remote/notification action
     // so we can fire the coordinator callback exactly once.
     final wasActive = _currentIndex != null;
-    // Reset state up-front so any in-flight stream events that fire during
-    // teardown don't re-trigger auto-advance against a stale index.
+    // Reset state up-front so any in-flight stream events — or a
+    // `playParagraph` call already in flight — don't re-trigger auto-advance
+    // or a stale play against an index/session that no longer exists.
+    _generation++;
     _currentIndex = null;
     _lastCompletedIndex = null;
     _paragraphs = const [];
