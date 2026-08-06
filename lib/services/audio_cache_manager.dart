@@ -33,8 +33,8 @@ class _StaleSessionException implements Exception {
 ///
 /// Port of the React Native `AudioCacheManager` with:
 ///   * Ultra-priority immediate-next preload
-///   * Character threshold accumulator
-///   * Speed-adaptive distance
+///   * Character threshold accumulator (independent of playback speed —
+///     the player applies speed, not the cache)
 ///   * LRU-ish eviction (keep window around currentIndex)
 ///   * Offline-first lookup
 ///
@@ -107,15 +107,6 @@ class AudioCacheManager {
       _offlineCache = null;
       _startNewSession();
     }
-  }
-
-  void setCurrentlyPlaying(int? index) {
-    // Used as a hint; currently no-op after removing unused field.
-  }
-
-  void setPlaybackSpeed(double speed) {
-    // No-op: the preload buffer is character-based, independent of speed.
-    // Playback speed is applied by the audio player, not here.
   }
 
   /// Update voices. Clears the cache when voices actually change.
@@ -366,6 +357,17 @@ class AudioCacheManager {
     );
 
     if (gen != _generation) return; // discard — session moved on mid-synthesis
+
+    // Mirror the >1024-byte sanity check used for offline-downloaded files
+    // (see offline_content_service.dart) so a truncated/corrupt synthesis
+    // result — e.g. the backend returning an empty/error body with a 200 —
+    // fails loudly instead of being cached and played as silence/noise.
+    if (audio.bytes.length <= 1024) {
+      throw StateError(
+        'AudioCacheManager: synthesized audio too small '
+        '(${audio.bytes.length} bytes) to be valid',
+      );
+    }
 
     if (kIsWeb) {
       // Web has no writable file system — store audio as an in-memory data URI

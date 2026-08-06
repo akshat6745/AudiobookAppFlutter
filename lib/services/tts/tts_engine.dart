@@ -1,5 +1,17 @@
 import 'dart:typed_data';
 
+/// Thrown by [RemoteTtsEngine] when there's no network connectivity, instead
+/// of letting the request hang until dio's connect timeout fires. Callers
+/// that want a fast, clear failure (rather than a generic network exception
+/// after ~30s) can catch this specifically.
+class TtsOfflineException implements Exception {
+  const TtsOfflineException();
+
+  @override
+  String toString() =>
+      'TtsOfflineException: no network connectivity for remote TTS synthesis';
+}
+
 /// Audio produced by a [TtsEngine]: raw bytes plus a format hint so callers
 /// know the correct file extension for the cache (`downloads/<id>/<i>.<ext>`).
 class TtsAudio {

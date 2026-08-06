@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 
 import 'audio_cache_manager.dart';
@@ -63,8 +64,23 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   /// coordinator (which would loop).
   bool _suppressRemoteStop = false;
 
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  StreamSubscription<void>? _becomingNoisySub;
+
+  /// Set while we've ducked the volume for an [AudioInterruptionType.duck]
+  /// interruption (e.g. a notification chime), so we know to restore it —
+  /// and only it, not a user-chosen volume — when the interruption ends.
+  bool _duckedByInterruption = false;
+
+  /// Set while we've auto-paused for an [AudioInterruptionType.pause]
+  /// interruption (e.g. a phone call). Only an interruption *we* paused for
+  /// should trigger auto-resume; a manual pause during the interruption
+  /// must stay paused.
+  bool _pausedByInterruption = false;
+
   AudiobookHandler({required this.cache}) {
     _wireStreams();
+    _wireAudioSessionEvents();
   }
 
   // ---- Public API ----
@@ -165,7 +181,6 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
       if (!_isCurrent(gen, paragraphIndex)) return false;
 
-      cache.setCurrentlyPlaying(paragraphIndex);
       await _player.play();
       return true;
     } catch (_) {
@@ -261,7 +276,6 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   Future<void> setSpeed(double speed) async {
     final clamped = speed.clamp(0.25, 4.0);
     _playbackSpeed = clamped;
-    cache.setPlaybackSpeed(clamped);
     await _player.setSpeed(clamped);
     _rateApplied = true;
     _emitPlaybackState();
@@ -276,6 +290,8 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> disposeHandler() async {
+    await _interruptionSub?.cancel();
+    await _becomingNoisySub?.cancel();
     await _player.dispose();
   }
 
@@ -285,6 +301,61 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // Playback state feedback to audio_service.
     _player.playerStateStream.listen(_onPlayerStateChanged);
     _player.playbackEventStream.listen((e) => _emitPlaybackState());
+  }
+
+  /// Subscribes to `audio_session`'s interruption + route-change streams.
+  /// The session itself is configured once in `main.dart` before this
+  /// handler is constructed; here we only react to it. Fire-and-forget from
+  /// the constructor is intentional — these are best-effort OS integrations,
+  /// not required for the handler to function.
+  Future<void> _wireAudioSessionEvents() async {
+    final session = await AudioSession.instance;
+    _interruptionSub = session.interruptionEventStream.listen(_onInterruption);
+    _becomingNoisySub = session.becomingNoisyEventStream.listen((_) {
+      // Headphones/Bluetooth disconnected — pause immediately so audio
+      // doesn't suddenly blast out of the speaker.
+      if (_player.playing) _player.pause();
+    });
+  }
+
+  void _onInterruption(AudioInterruptionEvent event) {
+    if (event.begin) {
+      switch (event.type) {
+        case AudioInterruptionType.duck:
+          // Another app needs to be briefly heard (e.g. a nav prompt) —
+          // lower volume rather than pausing narration.
+          _duckedByInterruption = true;
+          _player.setVolume(0.3);
+          break;
+        case AudioInterruptionType.pause:
+        case AudioInterruptionType.unknown:
+          // Phone call / another app took audio focus — pause; only resume
+          // automatically if we're the one who paused it.
+          if (_player.playing) {
+            _pausedByInterruption = true;
+            _player.pause();
+          }
+          break;
+      }
+    } else {
+      switch (event.type) {
+        case AudioInterruptionType.duck:
+          if (_duckedByInterruption) {
+            _duckedByInterruption = false;
+            _player.setVolume(1.0);
+          }
+          break;
+        case AudioInterruptionType.pause:
+          if (_pausedByInterruption) {
+            _pausedByInterruption = false;
+            _player.play();
+          }
+          break;
+        case AudioInterruptionType.unknown:
+          _pausedByInterruption = false;
+          break;
+      }
+    }
   }
 
   Future<void> _onPlayerStateChanged(PlayerState state) async {
