@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/audio_providers.dart';
 import '../providers/playback_coordinator.dart';
 import '../providers/tts_engine_provider.dart';
+import '../providers/voice_preferences_provider.dart';
 import '../services/tts/kokoro_voices.dart';
 import '../theme/app_theme.dart';
 import 'voice_picker.dart';
@@ -71,6 +72,7 @@ class NowPlayingModal extends ConsumerWidget {
             const SizedBox(height: 8),
             const _SpeedChips(),
             const SizedBox(height: 20),
+            const _PresetsRow(),
             const _SectionLabel(label: 'Narrator voice'),
             const SizedBox(height: 8),
             const _VoiceChips(role: _VoiceRole.narrator),
@@ -226,6 +228,110 @@ class _SpeedChips extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Quick-select narrator+dialogue voice pairings (only meaningful when the
+/// on-device Kokoro catalog is active — the remote voice list has no
+/// curated pairings).
+class _PresetsRow extends ConsumerWidget {
+  const _PresetsRow();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final kokoroActive = ref.watch(ttsModelPathsProvider).valueOrNull != null;
+    if (!kokoroActive) return const SizedBox.shrink();
+
+    final narrator = ref.watch(narratorVoiceProvider);
+    final dialogue = ref.watch(dialogueVoiceProvider);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionLabel(label: 'Quick presets'),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 68,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: KokoroVoices.presets.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final preset = KokoroVoices.presets[i];
+                final isActive =
+                    preset.narratorId == narrator && preset.dialogueId == dialogue;
+                return _PresetChip(
+                  preset: preset,
+                  isActive: isActive,
+                  onTap: () => _applyPreset(ref, preset),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _applyPreset(WidgetRef ref, VoicePreset preset) async {
+    final cache = ref.read(audioCacheProvider);
+    ref.read(narratorVoiceProvider.notifier).state = preset.narratorId;
+    ref.read(dialogueVoiceProvider.notifier).state = preset.dialogueId;
+    await cache.updateVoices(preset.narratorId, preset.dialogueId);
+    final recents = ref.read(recentVoiceIdsProvider.notifier);
+    await recents.markUsed(preset.narratorId);
+    await recents.markUsed(preset.dialogueId);
+  }
+}
+
+class _PresetChip extends StatelessWidget {
+  const _PresetChip({
+    required this.preset,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  final VoicePreset preset;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isActive ? AppColors.primary : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              preset.name,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              preset.description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

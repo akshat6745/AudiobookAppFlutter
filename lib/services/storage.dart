@@ -31,4 +31,6 @@ class StorageKeys {
   static const dialogueVoice = 'pref_dialogue_voice';
   static const playbackSpeed = 'pref_playback_speed';
   static const lastPlayingState = 'last_playing_state';
+  static const favoriteVoiceIds = 'pref_favorite_voice_ids';
+  static const recentVoiceIds = 'pref_recent_voice_ids';
 }

@@ -1,14 +1,7 @@
-/// Language groups for the Kokoro multilingual model.
+/// Accent groups for the installed **kokoro-en-v0_19** model (English only).
 enum VoiceLanguage {
   americanEnglish('American English'),
-  britishEnglish('British English'),
-  spanish('Spanish'),
-  french('French'),
-  hindi('Hindi'),
-  italian('Italian'),
-  japanese('Japanese'),
-  portuguese('Portuguese'),
-  chinese('Chinese');
+  britishEnglish('British English');
 
   const VoiceLanguage(this.label);
   final String label;
@@ -58,12 +51,14 @@ class VoicePreset {
   final String dialogueId;
 }
 
-/// Voice catalog for **kokoro-en-v0_19** (28 English voices across 4 accents).
-///
-/// IMPORTANT: `sid` is the speaker index into the model's `voices.bin`; the
-/// order below matches the sherpa-onnx kokoro-multi-lang-v1_1 model card. If
-/// you swap models, update this list to match — a wrong index plays the wrong
-/// voice.
+/// Voice catalog for **kokoro-en-v0_19**, the model actually downloaded by
+/// [TtsModelManager.kokoro] — 28 English voices across American/British
+/// accents. This list intentionally matches only what that model ships: the
+/// broader multi-lingual `kokoro-multi-lang-v1_1` model has additional
+/// speakers, but installing that model is a separate decision (bigger
+/// download, more languages) — see OFFLINE_TTS_POC_PLAN.md. If you swap
+/// models, update this list and [TtsModelManager] together; a sid with no
+/// matching voice in the installed model plays the wrong (or no) speaker.
 class KokoroVoices {
   const KokoroVoices._();
 
@@ -100,43 +95,25 @@ class KokoroVoices {
     KokoroVoice(id: 'bm_fable', sid: 25, name: 'Fable', language: VoiceLanguage.britishEnglish, isFemale: false),
     KokoroVoice(id: 'bm_george', sid: 26, name: 'George', language: VoiceLanguage.britishEnglish, isFemale: false),
     KokoroVoice(id: 'bm_lewis', sid: 27, name: 'Lewis', language: VoiceLanguage.britishEnglish, isFemale: false),
-    // Spanish
-    KokoroVoice(id: 'ef_dora', sid: 28, name: 'Dora', language: VoiceLanguage.spanish, isFemale: true),
-    KokoroVoice(id: 'em_alex', sid: 29, name: 'Alex', language: VoiceLanguage.spanish, isFemale: false),
-    // French
-    KokoroVoice(id: 'ff_siwis', sid: 30, name: 'Siwis', language: VoiceLanguage.french, isFemale: true),
-    // Hindi
-    KokoroVoice(id: 'hf_alpha', sid: 31, name: 'Alpha', language: VoiceLanguage.hindi, isFemale: true),
-    KokoroVoice(id: 'hf_beta', sid: 32, name: 'Beta', language: VoiceLanguage.hindi, isFemale: true),
-    KokoroVoice(id: 'hm_omega', sid: 33, name: 'Omega', language: VoiceLanguage.hindi, isFemale: false),
-    KokoroVoice(id: 'hm_psi', sid: 34, name: 'Psi', language: VoiceLanguage.hindi, isFemale: false),
-    // Italian
-    KokoroVoice(id: 'if_sara', sid: 35, name: 'Sara', language: VoiceLanguage.italian, isFemale: true),
-    KokoroVoice(id: 'im_nicola', sid: 36, name: 'Nicola', language: VoiceLanguage.italian, isFemale: false),
-    // Japanese
-    KokoroVoice(id: 'jf_alpha', sid: 37, name: 'Alpha', language: VoiceLanguage.japanese, isFemale: true),
-    KokoroVoice(id: 'jf_gongitsune', sid: 38, name: 'Gongitsune', language: VoiceLanguage.japanese, isFemale: true),
-    KokoroVoice(id: 'jf_nezumi', sid: 39, name: 'Nezumi', language: VoiceLanguage.japanese, isFemale: true),
-    KokoroVoice(id: 'jf_tebukuro', sid: 40, name: 'Tebukuro', language: VoiceLanguage.japanese, isFemale: true),
-    KokoroVoice(id: 'jm_kumo', sid: 41, name: 'Kumo', language: VoiceLanguage.japanese, isFemale: false),
-    // Portuguese (Brazilian)
-    KokoroVoice(id: 'pf_dora', sid: 42, name: 'Dora', language: VoiceLanguage.portuguese, isFemale: true),
-    KokoroVoice(id: 'pm_alex', sid: 43, name: 'Alex', language: VoiceLanguage.portuguese, isFemale: false),
-    KokoroVoice(id: 'pm_santa', sid: 44, name: 'Santa', language: VoiceLanguage.portuguese, isFemale: false),
-    // Chinese (Mandarin)
-    KokoroVoice(id: 'zf_xiaobei', sid: 45, name: 'Xiaobei', language: VoiceLanguage.chinese, isFemale: true),
-    KokoroVoice(id: 'zf_xiaoni', sid: 46, name: 'Xiaoni', language: VoiceLanguage.chinese, isFemale: true),
-    KokoroVoice(id: 'zf_xiaoxiao', sid: 47, name: 'Xiaoxiao', language: VoiceLanguage.chinese, isFemale: true),
-    KokoroVoice(id: 'zf_xiaoyi', sid: 48, name: 'Xiaoyi', language: VoiceLanguage.chinese, isFemale: true),
-    KokoroVoice(id: 'zm_yunjian', sid: 49, name: 'Yunjian', language: VoiceLanguage.chinese, isFemale: false),
-    KokoroVoice(id: 'zm_yunxi', sid: 50, name: 'Yunxi', language: VoiceLanguage.chinese, isFemale: false),
-    KokoroVoice(id: 'zm_yunxia', sid: 51, name: 'Yunxia', language: VoiceLanguage.chinese, isFemale: false),
-    KokoroVoice(id: 'zm_yunyang', sid: 52, name: 'Yunyang', language: VoiceLanguage.chinese, isFemale: false),
   ];
 
   /// Sensible English defaults (narrator = male, dialogue = female).
   static const String defaultNarratorId = 'am_michael';
   static const String defaultDialogueId = 'af_heart';
+
+  /// Seeded on first launch (see `FavoriteVoicesNotifier`) — three voices
+  /// with clearly distinct timbre so favorites are useful immediately,
+  /// rather than an empty section.
+  static const List<String> defaultFavoriteIds = [
+    'am_eric',
+    'am_michael',
+    'af_heart',
+  ];
+
+  /// Fixed sentence used for the picker's "play sample" button — short
+  /// enough to synthesize quickly on-device for every voice.
+  static const String previewSentence =
+      'The old lighthouse keeper watched the storm roll in from the sea.';
 
   static final Map<String, KokoroVoice> _byId = {for (final v in all) v.id: v};
 
@@ -148,6 +125,8 @@ class KokoroVoices {
   static String labelFor(String voiceId) => _byId[voiceId]?.label ?? voiceId;
 
   static bool isKokoro(String voiceId) => _byId.containsKey(voiceId);
+
+  static KokoroVoice? byId(String voiceId) => _byId[voiceId];
 
   /// Voices grouped by language, preserving the catalog order (English first).
   static Map<VoiceLanguage, List<KokoroVoice>> byLanguage() {

@@ -14,6 +14,7 @@ import 'router.dart';
 import 'services/api_client.dart';
 import 'services/audio_cache_manager.dart';
 import 'services/audio_handler.dart';
+import 'services/storage.dart';
 import 'theme/app_theme.dart';
 import 'widgets/backend_picker.dart';
 
@@ -100,6 +101,34 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
       if (engine != null) {
         ref.read(audioCacheProvider).updateEngine(engine);
       }
+    });
+    _restoreVoicePrefs();
+  }
+
+  /// Restores the narrator/dialogue voice the user last picked (persisted in
+  /// [StorageKeys.narratorVoice]/[dialogueVoice]), then keeps them in sync on
+  /// every future change. Runs after the providers already exist with their
+  /// hardcoded defaults, so the cache — constructed before `runApp` with
+  /// those same defaults — is explicitly resynced once the real preference
+  /// is known.
+  Future<void> _restoreVoicePrefs() async {
+    final storedNarrator = await Storage.getString(StorageKeys.narratorVoice);
+    final storedDialogue = await Storage.getString(StorageKeys.dialogueVoice);
+    if (!mounted) return;
+
+    if (storedNarrator != null || storedDialogue != null) {
+      final String narrator = storedNarrator ?? ref.read(narratorVoiceProvider);
+      final String dialogue = storedDialogue ?? ref.read(dialogueVoiceProvider);
+      ref.read(narratorVoiceProvider.notifier).state = narrator;
+      ref.read(dialogueVoiceProvider.notifier).state = dialogue;
+      await ref.read(audioCacheProvider).updateVoices(narrator, dialogue);
+    }
+
+    ref.listenManual(narratorVoiceProvider, (prev, next) {
+      Storage.setString(StorageKeys.narratorVoice, next);
+    });
+    ref.listenManual(dialogueVoiceProvider, (prev, next) {
+      Storage.setString(StorageKeys.dialogueVoice, next);
     });
   }
 
