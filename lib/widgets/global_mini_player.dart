@@ -14,6 +14,16 @@ class GlobalMiniPlayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Reader/chapters/main-shell each host their own GlobalMiniPlayer (it
+    // needs to sit above that screen's own bottom inset), so pushing a new
+    // route on top leaves the ones underneath mounted-but-invisible in the
+    // Navigator stack. Short-circuit before subscribing to anything when
+    // this instance isn't the visible route — otherwise every mini player
+    // ever pushed keeps rebuilding on each playback tick for the lifetime
+    // of the screen below it.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return const SizedBox.shrink();
+
     final audioState = ref.watch(audioStateProvider);
     if (audioState.currentIndex == null) return const SizedBox.shrink();
 

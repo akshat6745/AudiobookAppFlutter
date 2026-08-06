@@ -146,8 +146,18 @@ class _NovelCard extends StatelessWidget {
   final Novel novel;
   final int? lastChapter;
 
+  // Displayed at 70x100 logical pixels — cap the decoded bitmap to that size
+  // (times device pixel ratio) instead of whatever resolution the backend
+  // serves. Covers are frequently much larger than a 70x100 thumbnail, and
+  // without this every decoded image sits in the image cache at full
+  // resolution, multiplied by however many novels are in the (unbounded)
+  // ListView.builder scroll history.
+  static const _coverWidth = 70.0;
+  static const _coverHeight = 100.0;
+
   @override
   Widget build(BuildContext context) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: InkWell(
@@ -162,12 +172,14 @@ class _NovelCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
                 child: CachedNetworkImage(
                   imageUrl: novelApi.coverUrl(novel.slug),
-                  width: 70,
-                  height: 100,
+                  width: _coverWidth,
+                  height: _coverHeight,
                   fit: BoxFit.cover,
+                  memCacheWidth: (_coverWidth * dpr).round(),
+                  memCacheHeight: (_coverHeight * dpr).round(),
                   errorWidget: (_, __, ___) => Container(
-                    width: 70,
-                    height: 100,
+                    width: _coverWidth,
+                    height: _coverHeight,
                     color: AppColors.surfaceDark,
                     child: const Icon(Icons.book, color: Colors.white54),
                   ),

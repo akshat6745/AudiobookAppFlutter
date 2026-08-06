@@ -37,7 +37,14 @@ class ReaderScreen extends ConsumerStatefulWidget {
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final _scroll = ScrollController();
+  /// GlobalKeys are only needed for the paragraphs [Scrollable.ensureVisible]
+  /// might target (auto-scroll / follow-mode), not for every paragraph the
+  /// user has ever scrolled past — an unbounded map here grows for the life
+  /// of the screen on a long chapter. [_pruneItemKeys] caps it to a window
+  /// around whatever was most recently built.
   final _itemKeys = <int, GlobalKey>{};
+  static const _maxItemKeys = 80;
+  static const _itemKeyWindow = 40;
   double _fontSize = 16;
   bool _initialized = false;
   bool _autoScrolling = false;
@@ -155,6 +162,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
+  /// Evicts keys far from [builtIndex] once the map grows past
+  /// [_maxItemKeys], so scrolling through a long chapter doesn't hold onto a
+  /// GlobalKey per paragraph forever.
+  void _pruneItemKeys(int builtIndex) {
+    if (_itemKeys.length <= _maxItemKeys) return;
+    _itemKeys.removeWhere((i, _) => (i - builtIndex).abs() > _itemKeyWindow);
+  }
+
   double _averageItemHeight() {
     var total = 0.0, count = 0;
     for (final k in _itemKeys.values) {
@@ -188,8 +203,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(audioStateProvider);
-    final isThisChapter = _isPlayingThisChapter(state);
+    // Narrowed to just the 3 scalars this screen actually renders from
+    // AudioState — isPlaying/isLoading/content/playbackSpeed all change far
+    // more often (e.g. 3x per paragraph turn, via setIsLoading/setIsPlaying)
+    // than novel/chapter/currentIndex do, and previously every one of those
+    // changes rebuilt this whole screen (including the paragraph ListView)
+    // even though none of them affect what's rendered here.
+    final novelSlug = ref.watch(audioStateProvider.select((s) => s.novel?.slug));
+    final chapterNumber =
+        ref.watch(audioStateProvider.select((s) => s.chapter?.chapterNumber));
+    final currentIndex =
+        ref.watch(audioStateProvider.select((s) => s.currentIndex));
+    final isThisChapter = novelSlug == widget.novel.slug &&
+        chapterNumber == widget.chapter.chapterNumber;
 
     // Follow mode: auto-scroll to active paragraph whenever it changes,
     // but only while (a) the user has opted in via the AppBar button AND
@@ -206,14 +232,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       });
     });
 
-    final hasPlaying = isThisChapter && state.currentIndex != null;
+    final hasPlaying = isThisChapter && currentIndex != null;
 
-    final downloads = ref.watch(downloadsProvider);
-    final downloadRecord = _findDownload(downloads.items);
+    // Narrowed to just this chapter's own download record + active-transfer
+    // flag — without this, any other chapter's download progressing (a
+    // frequent update while a queue is running) rebuilt every open reader.
+    final downloadInfo = ref.watch(downloadsProvider.select((s) {
+      final record = _findDownload(s.items);
+      return (record, s.active.containsKey(record?.downloadId));
+    }));
+    final downloadRecord = downloadInfo.$1;
     final downloaded = downloadRecord?.status == DownloadStatusValue.completed;
     final downloading = downloadRecord?.status == DownloadStatusValue.pending ||
         downloadRecord?.status == DownloadStatusValue.processing ||
-        downloads.active.containsKey(downloadRecord?.downloadId);
+        downloadInfo.$2;
 
     return Scaffold(
       appBar: AppBar(
@@ -248,13 +280,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 color: _followMode ? AppColors.primary : null,
               ),
               onPressed: () {
-                final idx = state.currentIndex;
-                if (idx == null) return;
+                // Guarded by `hasPlaying` above, which already required
+                // `currentIndex != null` — Dart promotes it to non-null `int`
+                // here since it's a final local.
                 if (_followMode) {
                   setState(() => _followMode = false);
                 } else {
                   setState(() => _followMode = true);
-                  _scrollToActive(idx);
+                  _scrollToActive(currentIndex);
                 }
               },
             ),
@@ -280,7 +313,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       ),
       body: Stack(
         children: [
-          _buildBody(state, isThisChapter),
+          _buildBody(currentIndex, isThisChapter),
           const Align(
             alignment: Alignment.bottomCenter,
             child: GlobalMiniPlayer(),
@@ -290,7 +323,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  Widget _buildBody(AudioState state, bool isThisChapter) {
+  Widget _buildBody(int? currentIndex, bool isThisChapter) {
     if (_contentLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -332,11 +365,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         itemCount: _displayContent.length,
         itemBuilder: (_, index) {
           final key = _itemKeys.putIfAbsent(index, () => GlobalKey());
+          _pruneItemKeys(index);
           // Highlight ONLY when the audio state belongs to this chapter
           // AND the active index matches. This is the core fix for the
           // stale-highlight-across-chapters bug.
-          final isActive =
-              isThisChapter && state.currentIndex == index;
+          final isActive = isThisChapter && currentIndex == index;
           final isTitle = index == 0;
           return Container(
             key: key,

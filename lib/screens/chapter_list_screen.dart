@@ -226,9 +226,17 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final progress = ref.watch(progressProvider);
-    final lastChapter = progress[widget.novel.slug];
-    final downloads = ref.watch(downloadsProvider);
+    // Narrowed to this novel's own entry — progressProvider is a global
+    // map across every novel, so without this any *other* novel's progress
+    // update (e.g. from a background refresh while this screen happens to
+    // be open) rebuilt this whole chapter list.
+    final lastChapter =
+        ref.watch(progressProvider.select((m) => m[widget.novel.slug]));
+    // Only `.items` is read in this build — `isLoading`/`active` changing
+    // (e.g. a different chapter's download progressing) shouldn't rebuild
+    // the whole list.
+    final downloadItems =
+        ref.watch(downloadsProvider.select((s) => s.items));
 
     final chapters = _pageCache[_currentPage] ?? const <Chapter>[];
 
@@ -266,10 +274,10 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
                   isLoading: _isLoading,
                   error: _error,
                   lastChapter: lastChapter,
-                  downloads: downloads.items,
+                  downloads: downloadItems,
                   scrollController: _scroll,
                   onRetry: () => _loadPage(_currentPage),
-                  findDownload: (ch) => _findDownload(downloads.items, ch),
+                  findDownload: (ch) => _findDownload(downloadItems, ch),
                   onPlay: (ch) => _openReader(ch),
                   onDownload: _startDownload,
                 ),
