@@ -86,6 +86,7 @@ class TtsModelManager {
 
   bool _isComplete(TtsModelPaths paths) =>
       File(paths.kokoroModel).existsSync() &&
+      File(paths.kokoroVoices).existsSync() &&
       File(paths.tokens).existsSync() &&
       Directory(paths.espeakData).existsSync();
 

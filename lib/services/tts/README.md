@@ -1,4 +1,4 @@
-# TTS engine seam — POC runbook
+# TTS engine seam
 
 This folder holds the pluggable TTS layer described in
 [`OFFLINE_FIRST_ARCHITECTURE.md`](../../../OFFLINE_FIRST_ARCHITECTURE.md) §4.
@@ -8,42 +8,47 @@ swap, not a rewrite.
 | File | Role |
 |------|------|
 | `tts_engine.dart` | `TtsEngine` interface + `TtsAudio` (bytes + `'mp3'`/`'wav'`) |
-| `remote_tts_engine.dart` | Online — wraps existing `TtsApi` → backend `/tts-dual-voice` (MP3) |
-| `sherpa_onnx_tts_engine.dart` | **On-device** — Piper/Kokoro ONNX via `sherpa_onnx`, offline (WAV) |
+| `remote_tts_engine.dart` | Online — wraps existing `TtsApi` → backend `/tts-dual-voice` (MP3), connectivity-gated (fails fast with `TtsOfflineException` when offline instead of waiting out a network timeout) |
+| `sherpa_onnx_tts_engine.dart` | **On-device** — Kokoro ONNX via `sherpa_onnx`, fully offline (WAV), generation runs in a dedicated background isolate |
+| `tts_model_manager.dart` | Downloads/extracts/locates the Kokoro model archive on-device |
+| `kokoro_voices.dart` | Voice catalog (trimmed to the 28 voices in the installed `kokoro-en-v0_19` model) + curated presets |
 | `dual_voice_segmenter.dart` | Narrator/dialogue split, ported from `app/api/tts.py` |
+| `wav_encoder.dart` | PCM16 → WAV container encoding for on-device output |
 | `../../providers/tts_engine_provider.dart` | Riverpod selector: on-device when a model is installed, else remote |
 
 ## Status
-Scaffold. The `sherpa_onnx` import resolves only after the dependency is
-installed, and the on-device engine's exact API params should be confirmed
-against the installed package version's example.
 
-## Bring the POC up (Part A of OFFLINE_TTS_POC_PLAN.md)
+Implemented and wired end-to-end, not a scaffold. `AudioCacheManager` calls
+`TtsEngine.synthParagraph()` through `activeTtsEngineProvider` for every
+paragraph that isn't already covered by offline-downloaded audio; the engine
+in use is swappable at runtime via `AudioCacheManager.updateEngine()` (voice
+picker → on-device model download flow). See
+[`TTS_ENGINE_RECOMMENDATION.md`](../../../TTS_ENGINE_RECOMMENDATION.md) for
+why Kokoro/`sherpa_onnx` was chosen as the on-device engine.
 
-1. **Install the dependency**
-   ```bash
-   flutter pub get          # or: flutter pub add sherpa_onnx
-   flutter analyze          # expect this folder clean after pub get
-   ```
+## Provisioning the on-device model
 
-2. **Provision a model** (POC: side-load into the app documents dir)
-   - Kokoro (multi-voice; best for dual-voice): `model.onnx`, `voices.bin`,
-     `tokens.txt`, `espeak-ng-data/` — laid out as in `TtsModelPaths`.
-   - Or a Piper `en_US` voice for the light/fast comparison.
+Handled automatically by [`TtsModelManager`](tts_model_manager.dart) +
+[`tts_model_download_provider.dart`](../../providers/tts_model_download_provider.dart)
+and surfaced in the UI via
+[`tts_model_download_tile.dart`](../../widgets/tts_model_download_tile.dart):
 
-3. **Point the app at the model**
-   Override `ttsModelPathsProvider` to return a `TtsModelPaths(<dir>)`
-   (e.g. `<app documents>/models/kokoro`). Once `isAvailable()` is true,
-   `activeTtsEngineProvider` returns the on-device engine automatically.
-
-4. **Generate offline & measure**
-   Feed real chapter paragraphs (from `downloads/<id>/content.json`),
-   write the resulting `.wav` into the same `downloads/<id>/` layout, and run
-   the browse→read→listen flow in **airplane mode**. Record latency, RTF,
-   size, memory, battery/thermal per the plan's tables.
+1. User opts in from the voice picker / settings.
+2. `TtsModelManager.downloadAndInstall()` fetches the Kokoro
+   `kokoro-en-v0_19.tar.bz2` release asset, extracts it into
+   `<app documents>/models/kokoro/` in a background isolate, and remembers the
+   resolved path in `SharedPreferences`.
+3. Once `TtsModelManager.installedPaths()` resolves (requires `model.onnx`,
+   `voices.bin`, `tokens.txt`, and `espeak-ng-data/` to all be present),
+   `activeTtsEngineProvider` returns `SherpaOnnxTtsEngine` automatically —
+   no other code needs to know which engine is active.
 
 ## Notes
+
 - On-device output is **WAV**; `just_audio` plays it natively (no MP3 encoder
-  needed on device).
-- Dual-voice: Kokoro uses `narratorSid`/`dialogueSid` in one model; Piper needs
-  two models (more RAM) — see the plan's decision rubric.
+  needed on device). Remote output is **MP3**.
+- Dual-voice: Kokoro uses `narratorSid`/`dialogueSid` speaker ids within one
+  model — no second model needed (unlike e.g. Piper).
+- `AudioCacheManager` clears cached audio when the engine *kind* changes
+  (remote ↔ on-device), since the cached format differs — see
+  `updateEngine()`.
