@@ -7,6 +7,7 @@ import '../providers/backend_provider.dart';
 import '../providers/progress_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/backend_picker.dart';
+import '../widgets/tts_model_download_tile.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -58,6 +59,16 @@ class ProfileScreen extends ConsumerWidget {
             icon: const Icon(Icons.dns),
             label: Text('Backend: ${backend.label}'),
           ),
+          const SizedBox(height: 24),
+          Text(
+            'Offline Playback',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const TtsModelDownloadTile(),
           const SizedBox(height: 24),
           FilledButton.tonal(
             onPressed: () async {

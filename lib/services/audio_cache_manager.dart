@@ -9,7 +9,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/paragraph_audio.dart';
 import 'offline_content_service.dart';
-import 'tts_api.dart';
+import 'tts/remote_tts_engine.dart';
+import 'tts/tts_engine.dart';
 
 /// In-memory + on-disk cache for paragraph audio.
 ///
@@ -24,7 +25,6 @@ class AudioCacheManager {
   final Map<int, Completer<void>> _activeRequests = {};
   String _narratorVoice;
   String _dialogueVoice;
-  double _currentSpeed = 1.0;
   final AudioCacheConfig _config;
 
   String? _currentNovelName;
@@ -32,13 +32,29 @@ class AudioCacheManager {
 
   _OfflineBundle? _offlineCache;
 
+  TtsEngine _engine;
+
+  // Preload pump: keep _config.preloadCharacterThreshold characters of upcoming
+  // audio (paragraphs after _preloadAnchor, not counting it) ready or generating.
+  int _preloadAnchor = -1;
+  List<String> _preloadParagraphs = const [];
+
+  /// Optional override for the audio cache directory. When provided the
+  /// manager writes WAV/MP3 files here instead of the platform temp dir.
+  /// Used by unit tests to avoid platform-channel calls.
+  final Directory? _cacheDirOverride;
+
   AudioCacheManager({
     required String narratorVoice,
     required String dialogueVoice,
     AudioCacheConfig config = const AudioCacheConfig(),
+    TtsEngine? engine,
+    Directory? cacheDirOverride,
   })  : _narratorVoice = narratorVoice,
         _dialogueVoice = dialogueVoice,
-        _config = config;
+        _engine = engine ?? RemoteTtsEngine(),
+        _config = config,
+        _cacheDirOverride = cacheDirOverride;
 
   // ---- Public API ----
 
@@ -57,7 +73,8 @@ class AudioCacheManager {
   }
 
   void setPlaybackSpeed(double speed) {
-    _currentSpeed = speed;
+    // No-op: the preload buffer is character-based, independent of speed.
+    // Playback speed is applied by the audio player, not here.
   }
 
   /// Update voices. Clears the cache when voices actually change.
@@ -66,6 +83,21 @@ class AudioCacheManager {
     _narratorVoice = narrator;
     _dialogueVoice = dialogue;
     await clearCache();
+  }
+
+  /// Swap the TTS engine (remote ↔ on-device Kokoro). Releases the previous
+  /// engine's resources (e.g. the sherpa worker isolate + loaded model) and
+  /// clears cached audio when the engine kind changes, because the cached
+  /// format differs (mp3 for remote, wav for on-device).
+  Future<void> updateEngine(TtsEngine engine) async {
+    final old = _engine;
+    if (identical(old, engine)) return;
+    final sameKind = old.runtimeType == engine.runtimeType;
+    _engine = engine;
+    await old.dispose();
+    if (!sameKind) {
+      await clearCache();
+    }
   }
 
   bool isAudioReady(int index) {
@@ -104,16 +136,13 @@ class AudioCacheManager {
     return data;
   }
 
-  /// Forcefully preload up to `count` paragraphs ahead. Called on app pause.
+  /// Top up the preload buffer (e.g. on app pause). [count] is retained for
+  /// API compatibility; buffer depth is character-driven now.
   void preloadAhead(int currentIndex, List<String> allParagraphs,
       {int count = 15}) {
-    for (var i = currentIndex + 1;
-        i < allParagraphs.length && i <= currentIndex + count;
-        i++) {
-      if (!_cache.containsKey(i) && !_activeRequests.containsKey(i)) {
-        _loadAudioForParagraph(i, allParagraphs[i]);
-      }
-    }
+    _preloadAnchor = currentIndex;
+    _preloadParagraphs = allParagraphs;
+    _pumpPreload();
   }
 
   Future<void> clearCache() async {
@@ -174,6 +203,8 @@ class AudioCacheManager {
       return null;
     } finally {
       _activeRequests.remove(index);
+      // A load finished — advance the preload buffer to the next paragraph.
+      _pumpPreload();
     }
   }
 
@@ -214,8 +245,8 @@ class AudioCacheManager {
       }
     }
 
-    // 2. TTS API
-    final bytes = await ttsApi.convertDualVoice(
+    // 2. On-device (Kokoro) or remote TTS via the active engine.
+    final audio = await _engine.synthParagraph(
       text: text,
       paragraphVoice: _narratorVoice,
       dialogueVoice: _dialogueVoice,
@@ -224,10 +255,11 @@ class AudioCacheManager {
     if (kIsWeb) {
       // Web has no writable file system — store audio as an in-memory data URI
       // so just_audio can load it via a standard <audio src="data:..."> element.
-      entry.audioUri = 'data:audio/mpeg;base64,${base64Encode(bytes)}';
+      final mime = audio.format == 'wav' ? 'audio/wav' : 'audio/mpeg';
+      entry.audioUri = 'data:$mime;base64,${base64Encode(audio.bytes)}';
     } else {
-      final cachePath = await _ttsCachePath(index);
-      await File(cachePath).writeAsBytes(bytes);
+      final cachePath = await _ttsCachePath(index, audio.format);
+      await File(cachePath).writeAsBytes(audio.bytes);
       entry.audioUri = cachePath;
     }
 
@@ -249,57 +281,74 @@ class AudioCacheManager {
     );
   }
 
-  Future<String> _ttsCachePath(int index) async {
-    final cache = await getTemporaryDirectory();
-    final dir = Directory(p.join(cache.path, 'audio_cache'));
+  Future<String> _ttsCachePath(int index, String ext) async {
+    final base = _cacheDirOverride ?? await getTemporaryDirectory();
+    final dir = Directory(p.join(base.path, 'audio_cache'));
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return p.join(
       dir.path,
-      'audio_${index}_${DateTime.now().millisecondsSinceEpoch}.mp3',
+      'audio_${index}_${DateTime.now().millisecondsSinceEpoch}.$ext',
     );
   }
 
   // ---- Preload engine ----
 
   void _triggerPreload(int currentIndex, List<String> allParagraphs) {
-    final speed = _currentSpeed;
-    final delayMs = speed >= 1.5 ? 0 : 1;
-    Timer(Duration(milliseconds: delayMs), () async {
-      try {
-        // Ultra-priority: immediate next paragraph.
-        final nextIndex = currentIndex + 1;
-        if (nextIndex < allParagraphs.length &&
-            !_cache.containsKey(nextIndex) &&
-            !_activeRequests.containsKey(nextIndex)) {
-          _loadAudioForParagraph(nextIndex, allParagraphs[nextIndex]);
-        }
-
-        var totalChars = 0;
-        var preloadCount = 0;
-
-        final speedMultiplier = min(speed, 2.5);
-        final adaptiveMax = min(
-          (_config.maxPreloadDistance * speedMultiplier).floor(),
-          allParagraphs.length - currentIndex - 1,
-        );
-
-        for (var i = currentIndex + 1;
-            i < allParagraphs.length && preloadCount < adaptiveMax;
-            i++) {
-          final paragraph = allParagraphs[i];
-          totalChars += paragraph.length;
-          preloadCount++;
-
-          if (!_cache.containsKey(i) && !_activeRequests.containsKey(i)) {
-            _loadAudioForParagraph(i, paragraph);
-          }
-
-          if (totalChars >= _config.preloadCharacterThreshold) break;
-        }
-
-        _cleanupCache(currentIndex);
-      } catch (_) {}
+    _preloadAnchor = currentIndex;
+    _preloadParagraphs = allParagraphs;
+    Timer(const Duration(milliseconds: 1), () {
+      _pumpPreload();
+      _cleanupCache(currentIndex);
     });
+  }
+
+  /// Keep [AudioCacheConfig.preloadCharacterThreshold] characters of *upcoming*
+  /// audio (paragraphs after [_preloadAnchor], not counting it) ready or being
+  /// generated. On-device synthesis is serial, so this starts at most one new
+  /// generation per call; each completed load re-invokes it, advancing the
+  /// buffer until the upcoming-character target is met (or the chapter ends).
+  void _pumpPreload() {
+    final anchor = _preloadAnchor;
+    final paras = _preloadParagraphs;
+    if (anchor < 0 || paras.isEmpty) return;
+
+    var bufferedChars = 0;
+    var inFlight = false;
+    var firstUnstarted = -1;
+
+    for (var i = anchor + 1; i < paras.length; i++) {
+      final cached = _cache[i];
+      final ready = cached != null && cached.isValid;
+      final loading =
+          _activeRequests.containsKey(i) || (cached != null && cached.isLoading);
+      if (ready || loading) {
+        bufferedChars += paras[i].length;
+        if (loading) inFlight = true;
+      } else if (firstUnstarted < 0) {
+        firstUnstarted = i;
+      }
+      // Enough upcoming audio is ready or already generating — stop.
+      if (bufferedChars >= _config.preloadCharacterThreshold) return;
+    }
+
+    // Under target and nothing generating → start the next un-started paragraph.
+    if (!inFlight && firstUnstarted >= 0) {
+      _loadAudioForParagraph(firstUnstarted, paras[firstUnstarted]);
+    }
+  }
+
+  /// Index one past the last paragraph within the upcoming character window —
+  /// the furthest paragraph to keep buffered ahead of [currentIndex].
+  int _preloadHorizon(int currentIndex) {
+    final paras = _preloadParagraphs;
+    if (paras.isEmpty) return currentIndex + _config.maxPreloadDistance;
+    var chars = 0;
+    var i = currentIndex + 1;
+    while (i < paras.length && chars < _config.preloadCharacterThreshold) {
+      chars += paras[i].length;
+      i++;
+    }
+    return i;
   }
 
   void _cleanupCache(int currentIndex) {
@@ -307,7 +356,7 @@ class AudioCacheManager {
 
     const keepBefore = 3;
     final keepStart = max(0, currentIndex - keepBefore);
-    final keepEnd = currentIndex + _config.maxPreloadDistance;
+    final keepEnd = _preloadHorizon(currentIndex);
 
     final toDelete = <int>[];
     final filesToDelete = <String>[];

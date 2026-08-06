@@ -7,7 +7,6 @@ import '../models/downloaded_chapter.dart';
 import '../models/novel.dart';
 import '../providers/audio_providers.dart';
 import '../providers/download_providers.dart';
-import '../providers/last_position_provider.dart';
 import '../providers/progress_providers.dart';
 import '../router.dart';
 import '../services/chapter_api.dart';
@@ -230,10 +229,8 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
     final progress = ref.watch(progressProvider);
     final lastChapter = progress[widget.novel.slug];
     final downloads = ref.watch(downloadsProvider);
-    final lastPosition = ref.watch(lastPositionProvider)[widget.novel.slug];
 
     final chapters = _pageCache[_currentPage] ?? const <Chapter>[];
-    final hasLastRead = lastPosition != null || lastChapter != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -250,22 +247,17 @@ class _ChapterListScreenState extends ConsumerState<ChapterListScreen> {
         children: [
           Column(
             children: [
-              if (hasLastRead)
+              if (lastChapter != null)
                 ContinueReadingCard(
-                  position: lastPosition,
-                  chapterNumber: lastPosition?.chapter ?? lastChapter!,
-                  chapterTitle: _resolveChapterTitle(
-                    lastPosition?.chapter ?? lastChapter!,
-                  ),
+                  chapterNumber: lastChapter,
+                  chapterTitle: _resolveChapterTitle(lastChapter),
                   onTap: () {
-                    final chNum = lastPosition?.chapter ?? lastChapter!;
-                    final chapter = _findChapter(chNum) ??
+                    final chapter = _findChapter(lastChapter) ??
                         Chapter(
-                          chapterNumber: chNum,
-                          chapterTitle: 'Chapter $chNum',
+                          chapterNumber: lastChapter,
+                          chapterTitle: 'Chapter $lastChapter',
                         );
-                    _openReader(chapter,
-                        startParagraph: lastPosition?.paragraph);
+                    _openReader(chapter);
                   },
                 ),
               Expanded(

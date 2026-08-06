@@ -30,8 +30,8 @@ class AudioCacheConfig {
   final Duration cacheExpiry;
 
   const AudioCacheConfig({
-    this.maxCacheSize = 30,
-    this.preloadCharacterThreshold = 3000,
+    this.maxCacheSize = 50,
+    this.preloadCharacterThreshold = 8000,
     this.maxPreloadDistance = 15,
     this.cacheExpiry = const Duration(minutes: 30),
   });

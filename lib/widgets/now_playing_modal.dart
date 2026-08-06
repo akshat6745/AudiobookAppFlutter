@@ -4,7 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/audio_providers.dart';
 import '../providers/playback_coordinator.dart';
+import '../providers/tts_engine_provider.dart';
+import '../services/tts/kokoro_voices.dart';
 import '../theme/app_theme.dart';
+import 'voice_picker.dart';
 
 // FEATURES.md §11
 const _voices = [
@@ -238,6 +241,31 @@ class _VoiceChips extends ConsumerWidget {
     final current = role == _VoiceRole.narrator
         ? ref.watch(narratorVoiceProvider)
         : ref.watch(dialogueVoiceProvider);
+    final kokoroActive = ref.watch(ttsModelPathsProvider).valueOrNull != null;
+
+    // On-device Kokoro has 50+ voices across 9 languages — a wall of chips is
+    // unusable, so open a searchable, language-grouped picker instead.
+    if (kokoroActive) {
+      final label = KokoroVoices.isKokoro(current)
+          ? KokoroVoices.labelFor(current)
+          : '${KokoroVoices.labelFor(role == _VoiceRole.narrator ? KokoroVoices.defaultNarratorId : KokoroVoices.defaultDialogueId)} (default)';
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: () => showVoicePicker(
+            context: context,
+            title:
+                role == _VoiceRole.narrator ? 'Narrator voice' : 'Dialogue voice',
+            currentVoiceId: current,
+            onSelected: (id) => _apply(ref, id),
+          ),
+          icon: const Icon(Icons.record_voice_over, size: 18),
+          label: Text(label),
+        ),
+      );
+    }
+
+    // Remote (edge) voices — small set, chips are fine.
     return Wrap(
       spacing: 8,
       runSpacing: 4,

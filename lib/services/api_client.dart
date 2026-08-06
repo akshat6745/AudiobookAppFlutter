@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Backends the app can talk to. Switched from the Profile screen at
@@ -40,6 +44,26 @@ Dio buildApiClient() {
       headers: {'Content-Type': 'application/json'},
     ),
   );
+
+  // DEBUG-ONLY: on networks with a TLS-inspecting proxy (e.g. Cloudflare Zero
+  // Trust / a corporate VPN), the backend cert is re-signed by a private CA the
+  // emulator's Dart TLS stack doesn't trust → CERTIFICATE_VERIFY_FAILED. Accept
+  // it ONLY in debug builds and ONLY for our known backend hosts so local
+  // testing works. Release builds keep full certificate verification.
+  if (kDebugMode && !kIsWeb) {
+    final allowedHosts = {
+      for (final b in BackendChoice.values) Uri.parse(b.url).host,
+    };
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final client = HttpClient();
+        client.badCertificateCallback =
+            (cert, host, port) => allowedHosts.contains(host);
+        return client;
+      },
+    );
+  }
+
   return dio;
 }
 

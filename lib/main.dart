@@ -8,6 +8,8 @@ import 'providers/audio_providers.dart';
 import 'providers/auth_providers.dart';
 import 'providers/playback_coordinator.dart';
 import 'providers/progress_providers.dart';
+import 'providers/tts_engine_provider.dart';
+import 'providers/tts_model_download_provider.dart';
 import 'router.dart';
 import 'services/api_client.dart';
 import 'services/audio_cache_manager.dart';
@@ -86,6 +88,18 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
     // Eagerly create the coordinator so handler callbacks are wired.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(playbackCoordinatorProvider);
+      // Auto-provision the offline voice on first launch (Wi-Fi only). Playback
+      // uses the remote engine until it lands, then upgrades automatically.
+      ref.read(ttsModelDownloadProvider.notifier).maybeAutoStart();
+    });
+    // Flip the cache's TTS engine to on-device Kokoro once its model is
+    // installed (and back to remote otherwise). Defaults to remote until this
+    // resolves, so playback is never blocked.
+    ref.listenManual(activeTtsEngineProvider, (prev, next) {
+      final engine = next.valueOrNull;
+      if (engine != null) {
+        ref.read(audioCacheProvider).updateEngine(engine);
+      }
     });
   }
 

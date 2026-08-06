@@ -21,8 +21,20 @@ dependencies:
   audio_service: ^0.18.15
   rxdart: ^0.27.7
 
+  # On-device neural TTS (Piper/Kokoro ONNX) — offline synthesis, no network.
+  # Run `flutter pub add sherpa_onnx` to pin the exact latest version if this
+  # constraint fails to resolve. See OFFLINE_TTS_POC_PLAN.md.
+  sherpa_onnx: ^1.10.0
+
+  # Archive extraction for the downloaded on-device TTS model (tar.bz2 / tar.gz).
+  archive: ^3.4.0
+
   # Networking
   dio: ^5.7.0
+
+  # Connectivity — only auto-download the ~300 MB offline model on unmetered
+  # (Wi-Fi/ethernet) networks.
+  connectivity_plus: ^6.0.0
 
   # Storage
   path_provider: ^2.1.4

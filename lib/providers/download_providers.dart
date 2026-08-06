@@ -44,27 +44,17 @@ class DownloadsNotifier extends StateNotifier<DownloadsState> {
   }
 
   Future<String> startDownload(DownloadRequest req) async {
-    final resp = await downloadService.startChapterDownload(req);
-    await refresh();
-
-    // Fire-and-forget poll
-    () async {
-      try {
-        await downloadService.pollUntilComplete(
-          resp.downloadId,
-          onProgress: (status) {
-            final next = {...state.active};
-            next[resp.downloadId] = status;
-            state = state.copyWith(active: next);
-          },
-        );
-      } catch (_) {}
-      final next = {...state.active}..remove(resp.downloadId);
-      state = state.copyWith(active: next);
+    // Text-only download completes synchronously (no server audio pipeline);
+    // audio is generated on-device at playback time. Errors surface via the
+    // record's `error` status, so refresh either way.
+    String downloadId = '';
+    try {
+      final resp = await downloadService.startChapterDownload(req);
+      downloadId = resp.downloadId;
+    } finally {
       await refresh();
-    }();
-
-    return resp.downloadId;
+    }
+    return downloadId;
   }
 
   Future<void> deleteDownload(String downloadId) async {
