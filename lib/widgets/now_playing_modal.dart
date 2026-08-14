@@ -3,25 +3,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/audio_providers.dart';
+import '../providers/backend_provider.dart';
 import '../providers/playback_coordinator.dart';
 import '../providers/tts_engine_provider.dart';
 import '../providers/voice_preferences_provider.dart';
 import '../services/tts/kokoro_voices.dart';
+import '../services/tts/remote_tts_engine.dart';
+import '../services/tts/sherpa_onnx_tts_engine.dart';
 import '../theme/app_theme.dart';
+import 'online_voice_picker.dart';
+import 'tts_mode_selector.dart';
 import 'voice_picker.dart';
 
-// FEATURES.md §11
-const _voices = [
-  'en-US-AvaMultilingualNeural',
-  'en-US-ChristopherNeural',
-  'en-US-JennyNeural',
-  'en-GB-SoniaNeural',
-  'en-GB-RyanNeural',
-  'en-US-AndrewMultilingualNeural',
-  'en-US-EmmaMultilingualNeural',
-];
-
 const _speeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+/// Whether the *actually resolved* engine (not just the model-installed
+/// check) is on-device Kokoro — this is what voice UI should branch on, so
+/// it always matches what will really generate the audio.
+bool _kokoroResolved(WidgetRef ref) =>
+    ref.watch(activeTtsEngineProvider).valueOrNull is SherpaOnnxTtsEngine;
 
 Future<void> showNowPlayingModal(BuildContext context) {
   return showModalBottomSheet<void>(
@@ -73,6 +73,12 @@ class NowPlayingModal extends ConsumerWidget {
             const _SpeedChips(),
             const SizedBox(height: 20),
             const _PresetsRow(),
+            const _SectionLabel(label: 'Voice generation'),
+            const SizedBox(height: 8),
+            const TtsModeSelector(),
+            const SizedBox(height: 6),
+            const _EngineStatusBanner(),
+            const SizedBox(height: 20),
             const _SectionLabel(label: 'Narrator voice'),
             const SizedBox(height: 8),
             const _VoiceChips(role: _VoiceRole.narrator),
@@ -205,6 +211,64 @@ class _TransportRow extends ConsumerWidget {
   }
 }
 
+/// Explains what "Auto" actually resolved to right now, and confirms Online/
+/// Offline are doing what the user picked. Auto is the one mode whose
+/// behavior isn't self-evident from the toggle alone (it silently falls back
+/// to online when the on-device model isn't installed), so this makes that
+/// resolution visible instead of leaving the user to guess why voice
+/// selection looks different than expected.
+class _EngineStatusBanner extends ConsumerWidget {
+  const _EngineStatusBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(ttsModeProvider);
+    final engineAsync = ref.watch(activeTtsEngineProvider);
+    final backend = ref.watch(backendProvider);
+
+    return engineAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (engine) {
+        final isOnline = engine is RemoteTtsEngine;
+        final IconData icon;
+        final String text;
+        switch (mode) {
+          case TtsMode.online:
+            icon = Icons.cloud_outlined;
+            text = 'Online — generated via the ${backend.label} backend.';
+          case TtsMode.offline when !isOnline:
+            icon = Icons.download_done;
+            text = 'Offline — generated on-device, no network used.';
+          case TtsMode.offline:
+            icon = Icons.cloud_outlined;
+            text = "Offline selected, but the on-device model isn't "
+                'downloaded yet — using the backend for now.';
+          case TtsMode.auto when isOnline:
+            icon = Icons.auto_awesome;
+            text = 'Auto — using online voices (on-device model not '
+                'installed).';
+          case TtsMode.auto:
+            icon = Icons.auto_awesome;
+            text = "Auto — using the on-device model since it's installed.";
+        }
+        return Row(
+          children: [
+            Icon(icon, size: 14, color: AppColors.textMuted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _SpeedChips extends ConsumerWidget {
   const _SpeedChips();
 
@@ -240,8 +304,7 @@ class _PresetsRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final kokoroActive = ref.watch(ttsModelPathsProvider).valueOrNull != null;
-    if (!kokoroActive) return const SizedBox.shrink();
+    if (!_kokoroResolved(ref)) return const SizedBox.shrink();
 
     final narrator = ref.watch(narratorVoiceProvider);
     final dialogue = ref.watch(dialogueVoiceProvider);
@@ -347,11 +410,13 @@ class _VoiceChips extends ConsumerWidget {
     final current = role == _VoiceRole.narrator
         ? ref.watch(narratorVoiceProvider)
         : ref.watch(dialogueVoiceProvider);
-    final kokoroActive = ref.watch(ttsModelPathsProvider).valueOrNull != null;
+    final title =
+        role == _VoiceRole.narrator ? 'Narrator voice' : 'Dialogue voice';
 
-    // On-device Kokoro has 50+ voices across 9 languages — a wall of chips is
-    // unusable, so open a searchable, language-grouped picker instead.
-    if (kokoroActive) {
+    // Both catalogs (50+ Kokoro voices, 47 online voices) are too big for a
+    // wall of chips — open a searchable, grouped picker either way, backed
+    // by whichever catalog actually matches the resolved engine.
+    if (_kokoroResolved(ref)) {
       final label = KokoroVoices.isKokoro(current)
           ? KokoroVoices.labelFor(current)
           : '${KokoroVoices.labelFor(role == _VoiceRole.narrator ? KokoroVoices.defaultNarratorId : KokoroVoices.defaultDialogueId)} (default)';
@@ -360,8 +425,7 @@ class _VoiceChips extends ConsumerWidget {
         child: OutlinedButton.icon(
           onPressed: () => showVoicePicker(
             context: context,
-            title:
-                role == _VoiceRole.narrator ? 'Narrator voice' : 'Dialogue voice',
+            title: title,
             currentVoiceId: current,
             onSelected: (id) => _apply(ref, id),
           ),
@@ -371,19 +435,30 @@ class _VoiceChips extends ConsumerWidget {
       );
     }
 
-    // Remote (edge) voices — small set, chips are fine.
-    return Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      children: [
-        for (final v in _voices)
-          ChoiceChip(
-            label: Text(_shortVoiceName(v)),
-            selected: v == current,
-            onSelected: (_) => _apply(ref, v),
-          ),
-      ],
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: () => showOnlineVoicePicker(
+          context: context,
+          title: title,
+          currentVoiceId: current,
+          onSelected: (id) => _apply(ref, id),
+        ),
+        icon: const Icon(Icons.record_voice_over, size: 18),
+        label: Text(_onlineVoiceLabel(current)),
+      ),
     );
+  }
+
+  /// Short display name for an online voice id, e.g.
+  /// `en-US-AvaMultilingualNeural` → `Ava`. Falls back to the raw id for a
+  /// stale/unrecognized value (e.g. right after switching from offline,
+  /// before the reconciliation in main.dart has applied — see
+  /// `_reconcileVoicesForEngine`).
+  String _onlineVoiceLabel(String voiceId) {
+    final match = RegExp(r'^en-[A-Z]{2}-(\w+?)(Multilingual)?Neural$')
+        .firstMatch(voiceId);
+    return match?.group(1) ?? voiceId;
   }
 
   Future<void> _apply(WidgetRef ref, String voice) async {
@@ -401,14 +476,6 @@ class _VoiceChips extends ConsumerWidget {
 
     await cache.updateVoices(newNarrator, newDialogue);
   }
-}
-
-String _shortVoiceName(String v) {
-  var s = v.replaceFirst(RegExp(r'^en-[A-Z]{2}-'), '');
-  s = s
-      .replaceFirst('MultilingualNeural', '')
-      .replaceFirst('Neural', '');
-  return s;
 }
 
 class _SectionLabel extends StatelessWidget {

@@ -13,6 +13,12 @@ class FakeTtsEngine extends TtsEngine {
   final List<String> synthesized = [];
   Duration delay;
 
+  /// Tracks overlap between concurrent [synthParagraph] calls, so tests can
+  /// assert the preload pump actually dispatches several at once instead of
+  /// waiting for each to finish before starting the next.
+  int _active = 0;
+  int peakConcurrent = 0;
+
   FakeTtsEngine({this.delay = Duration.zero});
 
   /// Minimal valid WAV (44 header + 2400 samples × 2 bytes = 4844 bytes total).
@@ -29,9 +35,15 @@ class FakeTtsEngine extends TtsEngine {
     required String paragraphVoice,
     required String dialogueVoice,
   }) async {
-    if (delay != Duration.zero) await Future.delayed(delay);
-    synthesized.add(text);
-    return TtsAudio(_silenceWav(), 'wav');
+    _active++;
+    if (_active > peakConcurrent) peakConcurrent = _active;
+    try {
+      if (delay != Duration.zero) await Future.delayed(delay);
+      synthesized.add(text);
+      return TtsAudio(_silenceWav(), 'wav');
+    } finally {
+      _active--;
+    }
   }
 
   @override
@@ -44,13 +56,17 @@ AudioCacheManager _makeCache({
   required Directory tmpDir,
   TtsEngine? engine,
   int preloadThreshold = 500,
+  int maxConcurrentPreloads = 3,
 }) =>
     AudioCacheManager(
       narratorVoice: 'am_michael',
       dialogueVoice: 'af_heart',
       engine: engine ?? FakeTtsEngine(),
       cacheDirOverride: tmpDir,
-      config: AudioCacheConfig(preloadCharacterThreshold: preloadThreshold),
+      config: AudioCacheConfig(
+        preloadCharacterThreshold: preloadThreshold,
+        maxConcurrentPreloads: maxConcurrentPreloads,
+      ),
     );
 
 /// Returns paragraphs whose total character count exceeds [totalChars].
@@ -204,6 +220,49 @@ void main() {
 
       // Engine should have been called for paragraphs after index 3
       expect(engine.synthesized.any((t) => paras.indexOf(t) > 3), isTrue);
+    });
+  });
+
+  group('preload pump — concurrency', () {
+    test('dispatches multiple preloads concurrently, not one at a time',
+        () async {
+      final engine = FakeTtsEngine(delay: const Duration(milliseconds: 50));
+      // Threshold wide enough to want several paragraphs ahead.
+      final cache = _makeCache(
+          tmpDir: tmpDir, engine: engine, preloadThreshold: 1000);
+      cache.setContext('novel-slug', 1);
+      final paras = _paragraphs(count: 8, charsEach: 100);
+
+      await cache.getAudio(
+          paragraphIndex: 0, paragraphText: paras[0], allParagraphs: paras);
+
+      // Give the pump time to fire and the fake engine's delayed calls to
+      // overlap, but not enough for them to finish serially (3 × 50ms).
+      await Future.delayed(const Duration(milliseconds: 120));
+
+      expect(engine.peakConcurrent, greaterThan(1),
+          reason: 'preload should overlap requests instead of awaiting '
+              'each one before starting the next');
+    });
+
+    test('never exceeds maxConcurrentPreloads in-flight requests', () async {
+      final engine = FakeTtsEngine(delay: const Duration(milliseconds: 30));
+      final cache = _makeCache(
+        tmpDir: tmpDir,
+        engine: engine,
+        preloadThreshold: 5000,
+        maxConcurrentPreloads: 2,
+      );
+      cache.setContext('novel-slug', 1);
+      final paras = _paragraphs(count: 10, charsEach: 100);
+
+      await cache.getAudio(
+          paragraphIndex: 0, paragraphText: paras[0], allParagraphs: paras);
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      expect(engine.peakConcurrent, lessThanOrEqualTo(2),
+          reason: 'the concurrency cap must never be exceeded, regardless '
+              'of how large the character-threshold buffer is');
     });
   });
 

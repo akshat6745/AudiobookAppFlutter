@@ -434,19 +434,23 @@ class AudioCacheManager {
 
   /// Keep [AudioCacheConfig.preloadCharacterThreshold] characters of *upcoming*
   /// audio (paragraphs after [_preloadAnchor], not counting it) ready or being
-  /// generated. On-device synthesis is serial, so this starts at most one new
-  /// generation per call; each completed load re-invokes it, advancing the
-  /// buffer until the upcoming-character target is met (or the chapter ends).
+  /// generated, generating up to [AudioCacheConfig.maxConcurrentPreloads]
+  /// paragraphs at once (see that field's doc for why this is safe for both
+  /// engines). Each completed load re-invokes this, advancing the buffer and
+  /// topping up the concurrency window until the target is met (or the
+  /// chapter ends).
   void _pumpPreload() {
     final anchor = _preloadAnchor;
     final paras = _preloadParagraphs;
     if (anchor < 0 || paras.isEmpty) return;
 
     var bufferedChars = 0;
-    var inFlight = false;
-    var firstUnstarted = -1;
+    var inFlightCount = 0;
+    final toStart = <int>[];
 
     for (var i = anchor + 1; i < paras.length; i++) {
+      if (bufferedChars >= _config.preloadCharacterThreshold) break;
+
       final key = _keyFor(i);
       final cached = _cache[key];
       final ready = cached != null && cached.isValid;
@@ -454,17 +458,23 @@ class AudioCacheManager {
           _activeRequests.containsKey(key) || (cached != null && cached.isLoading);
       if (ready || loading) {
         bufferedChars += paras[i].length;
-        if (loading) inFlight = true;
-      } else if (firstUnstarted < 0) {
-        firstUnstarted = i;
+        if (loading) inFlightCount++;
+      } else if (inFlightCount + toStart.length < _config.maxConcurrentPreloads) {
+        // Tentatively commit to starting this one now, counting its chars
+        // toward the target immediately — otherwise a full concurrency
+        // window of "about to start" paragraphs wouldn't stop the scan from
+        // also queuing paragraphs well past the character threshold.
+        toStart.add(i);
+        bufferedChars += paras[i].length;
+      } else {
+        // No free concurrency slot left — stop; the next completed load
+        // re-invokes this and picks up scanning from here.
+        break;
       }
-      // Enough upcoming audio is ready or already generating — stop.
-      if (bufferedChars >= _config.preloadCharacterThreshold) return;
     }
 
-    // Under target and nothing generating → start the next un-started paragraph.
-    if (!inFlight && firstUnstarted >= 0) {
-      _loadAudioForParagraph(firstUnstarted, paras[firstUnstarted]);
+    for (final i in toStart) {
+      _loadAudioForParagraph(i, paras[i]);
     }
   }
 

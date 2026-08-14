@@ -15,6 +15,9 @@ import 'services/api_client.dart';
 import 'services/audio_cache_manager.dart';
 import 'services/audio_handler.dart';
 import 'services/storage.dart';
+import 'services/tts/kokoro_voices.dart';
+import 'services/tts/remote_tts_engine.dart';
+import 'services/tts/tts_engine.dart';
 import 'theme/app_theme.dart';
 import 'widgets/backend_picker.dart';
 
@@ -34,8 +37,8 @@ Future<void> main() async {
   // Single AudioCacheManager instance shared by handler and providers so the
   // UI reads the same cache that's feeding the player.
   final cache = AudioCacheManager(
-    narratorVoice: 'en-US-AvaMultilingualNeural',
-    dialogueVoice: 'en-GB-RyanNeural',
+    narratorVoice: kOnlineDefaultNarratorVoice,
+    dialogueVoice: kOnlineDefaultDialogueVoice,
   );
 
   final handler = await AudioService.init<AudiobookHandler>(
@@ -100,9 +103,38 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
       final engine = next.valueOrNull;
       if (engine != null) {
         ref.read(audioCacheProvider).updateEngine(engine);
+        _reconcileVoicesForEngine(engine);
       }
     });
     _restoreVoicePrefs();
+  }
+
+  /// Kokoro ids (`af_heart`) and edge-tts short names
+  /// (`en-US-AvaMultilingualNeural`) are different namespaces. Switching the
+  /// active engine can leave the persisted narrator/dialogue choice
+  /// meaningless for the *new* engine — e.g. the user downloads the offline
+  /// model while an online voice is selected, or forces Online mode while a
+  /// Kokoro voice is selected. The on-device engine tolerates this silently
+  /// (`KokoroVoices.sidFor` falls back to a default speaker id), but the
+  /// remote engine has no such fallback — an unrecognized voice name fails
+  /// the whole backend request (this was the "online voices don't work"
+  /// bug). Reset to a sensible default for whichever engine just became
+  /// active whenever the current choice doesn't belong to it.
+  void _reconcileVoicesForEngine(TtsEngine engine) {
+    final isOnline = engine is RemoteTtsEngine;
+    final narrator = ref.read(narratorVoiceProvider);
+    final dialogue = ref.read(dialogueVoiceProvider);
+    final narratorOk = KokoroVoices.isKokoro(narrator) != isOnline;
+    final dialogueOk = KokoroVoices.isKokoro(dialogue) != isOnline;
+    if (narratorOk && dialogueOk) return;
+
+    final newNarrator =
+        isOnline ? kOnlineDefaultNarratorVoice : KokoroVoices.defaultNarratorId;
+    final newDialogue =
+        isOnline ? kOnlineDefaultDialogueVoice : KokoroVoices.defaultDialogueId;
+    ref.read(narratorVoiceProvider.notifier).state = newNarrator;
+    ref.read(dialogueVoiceProvider.notifier).state = newDialogue;
+    ref.read(audioCacheProvider).updateVoices(newNarrator, newDialogue);
   }
 
   /// Restores the narrator/dialogue voice the user last picked (persisted in
@@ -123,6 +155,17 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
       ref.read(dialogueVoiceProvider.notifier).state = dialogue;
       await ref.read(audioCacheProvider).updateVoices(narrator, dialogue);
     }
+    if (!mounted) return;
+
+    // Restoring a persisted voice can reintroduce a mismatch with whichever
+    // engine actually resolves (e.g. a Kokoro voice restored while the
+    // resolved engine turns out to be online) — reconcile once more against
+    // the engine's *final* resolution so correctness doesn't depend on which
+    // of these two async paths (voice-pref restore vs. engine resolution)
+    // happens to finish first.
+    final engine = await ref.read(activeTtsEngineProvider.future);
+    if (!mounted) return;
+    _reconcileVoicesForEngine(engine);
 
     ref.listenManual(narratorVoiceProvider, (prev, next) {
       Storage.setString(StorageKeys.narratorVoice, next);

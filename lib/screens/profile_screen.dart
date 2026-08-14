@@ -7,6 +7,7 @@ import '../providers/backend_provider.dart';
 import '../providers/progress_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/backend_picker.dart';
+import '../widgets/tts_mode_selector.dart';
 import '../widgets/tts_model_download_tile.dart';
 
 class ProfileScreen extends ConsumerWidget {
@@ -68,6 +69,8 @@ class ProfileScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 8),
+          const TtsModeSelector(),
+          const SizedBox(height: 12),
           const TtsModelDownloadTile(),
           const SizedBox(height: 24),
           FilledButton.tonal(

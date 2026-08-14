@@ -5,11 +5,17 @@ import '../models/novel.dart';
 import '../services/audio_cache_manager.dart';
 import '../services/audio_handler.dart';
 
+/// Default online (edge-tts) narrator/dialogue voices — also the fallback
+/// applied whenever the active engine resolves to online but the persisted
+/// choice is a Kokoro id (see `_reconcileVoicesForEngine` in main.dart).
+const String kOnlineDefaultNarratorVoice = 'en-US-AvaMultilingualNeural';
+const String kOnlineDefaultDialogueVoice = 'en-GB-RyanNeural';
+
 /// Voice preferences (defaults match RN app).
 final narratorVoiceProvider =
-    StateProvider<String>((_) => 'en-US-AvaMultilingualNeural');
+    StateProvider<String>((_) => kOnlineDefaultNarratorVoice);
 final dialogueVoiceProvider =
-    StateProvider<String>((_) => 'en-GB-RyanNeural');
+    StateProvider<String>((_) => kOnlineDefaultDialogueVoice);
 
 final audioCacheProvider = Provider<AudioCacheManager>((ref) {
   final narrator = ref.watch(narratorVoiceProvider);

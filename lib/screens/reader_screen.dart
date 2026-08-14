@@ -122,6 +122,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _contentLoading = false;
         _contentError = null;
       });
+      // Record progress as soon as the chapter is actually opened and
+      // readable — not just when playback starts. Playing a paragraph
+      // (`_playParagraph`) also calls this via `loadChapter`; both paths
+      // converge on the same optimistic-update-then-persist notifier, so
+      // this is a no-op duplicate rather than a conflicting write.
+      unawaited(ref.read(progressProvider.notifier).updateProgress(
+            widget.novel.slug,
+            widget.chapter.chapterNumber,
+          ));
     } catch (e) {
       if (!mounted) return;
       setState(() {

@@ -33,4 +33,5 @@ class StorageKeys {
   static const lastPlayingState = 'last_playing_state';
   static const favoriteVoiceIds = 'pref_favorite_voice_ids';
   static const recentVoiceIds = 'pref_recent_voice_ids';
+  static const ttsMode = 'pref_tts_mode';
 }
