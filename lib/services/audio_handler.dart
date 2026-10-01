@@ -2,9 +2,52 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:just_audio/just_audio.dart';
 
 import 'audio_cache_manager.dart';
+
+/// Whether an [AudioInterruptionType.pause]/[AudioInterruptionType.unknown]
+/// interruption beginning should pause the player.
+enum InterruptionPauseDecision { pause, ignore }
+
+/// What to do when a [AudioInterruptionType.pause] interruption we paused
+/// for ends.
+enum InterruptionResumeDecision { resume, advance, ignore }
+
+/// Decides whether an interruption beginning should pause playback.
+///
+/// `playing` alone isn't enough: if the paragraph's last ~1s elapses right
+/// as the interruption begins, the player can already be at
+/// [ProcessingState.completed] with `playing == false` (platform-dependent
+/// timing), even though playback was active a moment ago. Treating
+/// `completed` as "was active" too — safe because a manual pause never
+/// reaches `completed` — is what makes the pause/resume symmetric regardless
+/// of how much of the paragraph was left when the interruption hit.
+@visibleForTesting
+InterruptionPauseDecision decideInterruptionPause({
+  required bool playing,
+  required ProcessingState processingState,
+}) {
+  final wasActive = playing || processingState == ProcessingState.completed;
+  return wasActive ? InterruptionPauseDecision.pause : InterruptionPauseDecision.ignore;
+}
+
+/// Decides how to resume when a [AudioInterruptionType.pause] interruption
+/// we paused for ends. If the paragraph had already reached its end during/
+/// around the interruption, resuming the same (completed) source is a no-op
+/// — advance to the next paragraph instead, via the same path the normal
+/// completion listener uses.
+@visibleForTesting
+InterruptionResumeDecision decideInterruptionResume({
+  required bool pausedByInterruption,
+  required ProcessingState processingState,
+}) {
+  if (!pausedByInterruption) return InterruptionResumeDecision.ignore;
+  return processingState == ProcessingState.completed
+      ? InterruptionResumeDecision.advance
+      : InterruptionResumeDecision.resume;
+}
 
 /// Callback contract used by the UI / providers layer.
 /// These are fired by the handler at key state transitions.
@@ -331,7 +374,11 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
         case AudioInterruptionType.unknown:
           // Phone call / another app took audio focus — pause; only resume
           // automatically if we're the one who paused it.
-          if (_player.playing) {
+          final decision = decideInterruptionPause(
+            playing: _player.playing,
+            processingState: _player.processingState,
+          );
+          if (decision == InterruptionPauseDecision.pause) {
             _pausedByInterruption = true;
             _player.pause();
           }
@@ -346,9 +393,20 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           }
           break;
         case AudioInterruptionType.pause:
-          if (_pausedByInterruption) {
-            _pausedByInterruption = false;
-            _player.play();
+          final decision = decideInterruptionResume(
+            pausedByInterruption: _pausedByInterruption,
+            processingState: _player.processingState,
+          );
+          _pausedByInterruption = false;
+          switch (decision) {
+            case InterruptionResumeDecision.resume:
+              _player.play();
+              break;
+            case InterruptionResumeDecision.advance:
+              _triggerAutoAdvance();
+              break;
+            case InterruptionResumeDecision.ignore:
+              break;
           }
           break;
         case AudioInterruptionType.unknown:
@@ -364,15 +422,25 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // Auto-advance trigger. just_audio fires processingState == completed
     // reliably on both Android (ExoPlayer) and iOS (AVAudioPlayer) — no
     // polling workaround needed.
-    if (state.processingState == ProcessingState.completed &&
-        _currentIndex != null &&
-        _lastCompletedIndex != _currentIndex) {
-      _lastCompletedIndex = _currentIndex;
-      final fromIndex = _currentIndex!;
-      final toIndex = fromIndex + 1;
-      if (_callbacks.onAutoAdvance != null) {
-        await _callbacks.onAutoAdvance!(fromIndex, toIndex);
-      }
+    if (state.processingState == ProcessingState.completed) {
+      await _triggerAutoAdvance();
+    }
+  }
+
+  /// Advances to the next paragraph past [_currentIndex]. Shared by the
+  /// natural-completion listener and the interruption-end handler (which
+  /// needs the same path when a paragraph finished during/around an
+  /// interruption). Guarded by [_lastCompletedIndex] so it can never fire
+  /// twice for the same paragraph.
+  Future<void> _triggerAutoAdvance() async {
+    if (_currentIndex == null || _lastCompletedIndex == _currentIndex) {
+      return;
+    }
+    _lastCompletedIndex = _currentIndex;
+    final fromIndex = _currentIndex!;
+    final toIndex = fromIndex + 1;
+    if (_callbacks.onAutoAdvance != null) {
+      await _callbacks.onAutoAdvance!(fromIndex, toIndex);
     }
   }
 
