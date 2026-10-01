@@ -44,3 +44,27 @@ class Novel {
         isPublic: json['isPublic'] as bool? ?? false,
       );
 }
+
+/// Response from `POST /upload-epub`.
+class NovelUploadResponse {
+  final String title;
+  final String? author;
+  final int chapterCount;
+  final String message;
+
+  const NovelUploadResponse({
+    required this.title,
+    required this.author,
+    required this.chapterCount,
+    required this.message,
+  });
+
+  factory NovelUploadResponse.fromJson(Map<String, dynamic> json) =>
+      NovelUploadResponse(
+        title: json['title'] as String? ?? '',
+        author: json['author'] as String?,
+        chapterCount: (json['chapterCount'] as num?)?.toInt() ?? 0,
+        message: json['message'] as String? ??
+            'Novel uploaded and parsed successfully',
+      );
+}

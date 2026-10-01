@@ -55,6 +55,8 @@ class ProfileScreen extends ConsumerWidget {
                   ),
                 )),
           const SizedBox(height: 24),
+          const _LinkGoogleButton(),
+          const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: () => showBackendPicker(context),
             icon: const Icon(Icons.dns),
@@ -82,6 +84,44 @@ class ProfileScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Lets a password account add Google as a second way in.
+class _LinkGoogleButton extends ConsumerStatefulWidget {
+  const _LinkGoogleButton();
+
+  @override
+  ConsumerState<_LinkGoogleButton> createState() => _LinkGoogleButtonState();
+}
+
+class _LinkGoogleButtonState extends ConsumerState<_LinkGoogleButton> {
+  bool _linking = false;
+
+  Future<void> _link() async {
+    setState(() => _linking = true);
+    final result = await ref.read(authProvider.notifier).linkGoogle();
+    if (!mounted) return;
+    setState(() => _linking = false);
+    if (result == null) return; // dismissed the Google sheet
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.message)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _linking ? null : _link,
+      icon: _linking
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.link),
+      label: Text(_linking ? 'Linking...' : 'Link Google account'),
     );
   }
 }

@@ -57,7 +57,7 @@ class ProgressNotifier extends StateNotifier<Map<String, int>> {
     final completer = Completer<void>();
     _inFlightFullRefresh = completer.future;
     try {
-      final list = await userApi.getUserProgress(user);
+      final list = await userApi.getUserProgress();
       final map = <String, int>{};
       for (final p in list) {
         map[p.novelName] = p.lastChapterRead;
@@ -88,7 +88,6 @@ class ProgressNotifier extends StateNotifier<Map<String, int>> {
     }
 
     final progress = await userApi.getNovelProgress(
-      username: user,
       novelSlug: novelSlug,
     );
     _lastNovelRefreshAt[novelSlug] = DateTime.now();
@@ -111,7 +110,6 @@ class ProgressNotifier extends StateNotifier<Map<String, int>> {
     state = {...state, novelSlug: chapterNumber};
     try {
       await userApi.saveProgress(
-        username: user,
         novelSlug: novelSlug,
         lastChapterRead: chapterNumber,
       );

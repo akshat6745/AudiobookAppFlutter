@@ -18,7 +18,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _password = TextEditingController();
   bool _showPassword = false;
   bool _submitting = false;
+  bool _googleSubmitting = false;
   String? _error;
+
+  /// Either sign-in path in flight disables both buttons.
+  bool get _busy => _submitting || _googleSubmitting;
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +97,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ],
                   const SizedBox(height: 24),
                   FilledButton(
-                    onPressed: _submitting ? null : _submit,
+                    onPressed: _busy ? null : _submit,
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
@@ -107,13 +111,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         : const Text('Sign In'),
                   ),
                   const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: () {
-                      _username.text = 'demo';
-                      _password.text = 'demo';
-                      _submit();
-                    },
-                    child: const Text('Use demo account'),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _submitGoogle,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white54),
+                    ),
+                    icon: _googleSubmitting
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.account_circle_outlined),
+                    label: Text(
+                      _googleSubmitting
+                          ? 'Signing in...'
+                          : 'Continue with Google',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Row(
@@ -157,5 +173,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         _error = 'Invalid username or password';
       });
     }
+  }
+
+  Future<void> _submitGoogle() async {
+    setState(() {
+      _googleSubmitting = true;
+      _error = null;
+    });
+    // Returns null on success *and* on user cancellation; a non-null value is
+    // a message worth showing.
+    final error = await ref.read(authProvider.notifier).loginWithGoogle();
+    if (!mounted) return;
+    if (error == null && ref.read(authProvider).user != null) {
+      context.go('/novels');
+      return;
+    }
+    setState(() {
+      _googleSubmitting = false;
+      _error = error;
+    });
   }
 }

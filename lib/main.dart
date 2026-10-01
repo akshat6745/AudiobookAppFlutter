@@ -14,6 +14,8 @@ import 'router.dart';
 import 'services/api_client.dart';
 import 'services/audio_cache_manager.dart';
 import 'services/audio_handler.dart';
+import 'services/auth_interceptor.dart';
+import 'services/session_store.dart';
 import 'services/storage.dart';
 import 'services/tts/kokoro_voices.dart';
 import 'services/tts/remote_tts_engine.dart';
@@ -21,14 +23,34 @@ import 'services/tts/tts_engine.dart';
 import 'theme/app_theme.dart';
 import 'widgets/backend_picker.dart';
 
+/// Attaches the access token to backend requests. Held here so the app widget
+/// can register its "token rejected" handler once the router exists.
+final _authInterceptor = AuthInterceptor(
+  readToken: () => sessionStore.current?.token,
+);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Read the stored user before runApp so the router sees the correct auth
   // state on the very first render — prevents the redirect-to-/login race on
   // web refresh and cold app starts.
+  // Restore the session (token + username) before runApp so the router sees
+  // the correct auth state on the very first render. Identity rests on the
+  // token, so a stored username without one counts as signed out.
+  final restoredSession = await sessionStore.load();
+  final storedUser = restoredSession?.username;
+
+  // Pre-token installs kept a bare username in SharedPreferences, including
+  // from the removed `demo`/`demo` bypass. It can't authenticate anything
+  // now, so clear it rather than leaving a misleading "signed in" record.
   final prefs = await SharedPreferences.getInstance();
-  final storedUser = prefs.getString('auth_user');
+  await prefs.remove('auth_user');
+
+  // Attach the token to every backend request. The "token was rejected"
+  // handler is registered once the app widget exists (it owns the router) —
+  // see _AudiobookAppState.initState.
+  apiClient.interceptors.add(_authInterceptor);
 
   // Resolve the persisted backend URL before any API wrapper fires its
   // first request — apiClient's baseUrl needs to be set up front.
@@ -89,6 +111,14 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // The backend rejected our token (expired, or JWT_SECRET was rotated):
+    // drop the session and send the user back to sign in, rather than
+    // leaving them on a screen where every request fails.
+    _authInterceptor.setOnUnauthorized(() async {
+      if (ref.read(authProvider).user == null) return; // already signed out
+      await ref.read(authProvider.notifier).onUnauthorized();
+      _router.go('/login');
+    });
     // Eagerly create the coordinator so handler callbacks are wired.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(playbackCoordinatorProvider);

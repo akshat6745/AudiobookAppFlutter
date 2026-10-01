@@ -1,4 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,8 +12,10 @@ import '../services/novel_api.dart';
 import '../theme/app_theme.dart';
 
 final _novelsFutureProvider = FutureProvider.autoDispose<List<Novel>>((ref) {
-  final user = ref.watch(authProvider).user;
-  return novelApi.getAllNovels(username: user);
+  // Still watches auth so the list refetches on sign-in/out; the backend
+  // scopes the library to the access token, not to a username we send.
+  ref.watch(authProvider).user;
+  return novelApi.getAllNovels();
 });
 
 class NovelListScreen extends ConsumerStatefulWidget {
@@ -23,6 +27,7 @@ class NovelListScreen extends ConsumerStatefulWidget {
 
 class _NovelListScreenState extends ConsumerState<NovelListScreen> {
   String _query = '';
+  bool _isUploading = false;
 
   @override
   void initState() {
@@ -34,6 +39,60 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
       if (!mounted) return;
       ref.read(progressProvider.notifier).refresh();
     });
+  }
+
+  Future<void> _handleUploadEbook() async {
+    if (_isUploading) return;
+
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['epub'],
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Could not open the file picker.');
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+
+    final picked = result.files.single;
+    final path = picked.path;
+    if (path == null || !picked.name.toLowerCase().endsWith('.epub')) {
+      _showMessage('Please select an EPUB (.epub) file.');
+      return;
+    }
+
+    setState(() => _isUploading = true);
+    try {
+      final response = await novelApi.uploadEpub(
+        filePath: path,
+        fileName: picked.name,
+      );
+      if (!mounted) return;
+      _showMessage(response.message.isNotEmpty
+          ? response.message
+          : '"${response.title}" was added to your library.');
+      ref.invalidate(_novelsFutureProvider);
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? (e.response?.data as Map)['detail'] as String?
+          : null;
+      _showMessage(detail ?? 'Could not upload the ebook. Please try again.');
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Could not upload the ebook. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -82,6 +141,23 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
                 prefixIcon: Icon(Icons.search),
               ),
               onChanged: (v) => setState(() => _query = v.toLowerCase().trim()),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isUploading ? null : _handleUploadEbook,
+                icon: _isUploading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file),
+                label: Text(_isUploading ? 'Uploading...' : 'Upload Ebook'),
+              ),
             ),
           ),
           const SizedBox(height: 8),

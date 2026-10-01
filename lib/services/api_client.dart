@@ -29,9 +29,21 @@ const _backendPrefKey = 'selected_backend';
 
 BackendChoice _current = BackendChoice.onrender;
 
+/// Local-development override, e.g. for end-to-end testing against a backend
+/// running on this machine:
+///
+/// ```
+/// flutter run -d chrome --web-port=3000 \
+///   --dart-define=API_BASE_URL=http://localhost:8077
+/// ```
+///
+/// Empty in normal builds, in which case the persisted [BackendChoice] wins.
+const _apiBaseUrlOverride = String.fromEnvironment('API_BASE_URL');
+
 /// Current backend base URL. Read this at call-time (not as a const) so that
 /// switching the backend at runtime is reflected immediately in URL builders.
-String get apiBaseUrl => _current.url;
+String get apiBaseUrl =>
+    _apiBaseUrlOverride.isNotEmpty ? _apiBaseUrlOverride : _current.url;
 
 BackendChoice get currentBackend => _current;
 
@@ -74,7 +86,7 @@ final Dio apiClient = buildApiClient();
 Future<void> loadStoredBackend() async {
   final prefs = await SharedPreferences.getInstance();
   _current = BackendChoice.fromKey(prefs.getString(_backendPrefKey));
-  apiClient.options.baseUrl = _current.url;
+  apiClient.options.baseUrl = apiBaseUrl;
 }
 
 /// Switch the active backend and persist the choice. Mutates the shared
@@ -82,7 +94,7 @@ Future<void> loadStoredBackend() async {
 /// on their next request — no app restart required.
 Future<void> setBackend(BackendChoice choice) async {
   _current = choice;
-  apiClient.options.baseUrl = choice.url;
+  apiClient.options.baseUrl = apiBaseUrl;
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(_backendPrefKey, choice.name);
 }

@@ -78,6 +78,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   }
 
   Future<void> _submit() async {
+    // The backend reserves email-shaped usernames for Google sign-in; say so
+    // here rather than letting it come back as a generic failure.
+    if (_username.text.contains('@')) {
+      setState(() => _error =
+          'Use "Continue with Google" to sign in with an email address');
+      return;
+    }
     if (_password.text.length < 6) {
       setState(() => _error = 'Password must be at least 6 characters');
       return;

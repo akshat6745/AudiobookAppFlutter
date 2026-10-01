@@ -1,14 +1,13 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../services/storage.dart';
+import '../services/google_auth_service.dart';
+import '../services/session_store.dart';
 import '../services/user_api.dart';
 
-// Username is not sensitive on its own (no token / password is stored;
-// the API just echoes the username back as a query parameter). Plain
-// SharedPreferences is far more reliable than the Android Keystore-backed
-// FlutterSecureStorage, which has been observed to lose keys after device
-// restarts or aggressive battery management.
-const _userKey = 'auth_user';
+// Identity now rests on an access token, not on the username — every
+// user-scoped endpoint derives the caller from the token. Both live together
+// in SessionStore (keystore-backed); see that file for why they aren't split.
 
 class AuthState {
   final String? user;
@@ -26,42 +25,119 @@ class AuthNotifier extends StateNotifier<AuthState> {
   // initialUser is pre-read from SharedPreferences in main() so the router
   // sees the correct auth state synchronously on first render — no async
   // restore race that redirects to /login on every app start / web refresh.
-  AuthNotifier({String? initialUser})
-      : super(AuthState(user: initialUser, isLoading: false));
+  //
+  // `api` and `google` are injectable so the sign-in flows can be tested
+  // without platform channels or a live backend.
+  AuthNotifier({
+    String? initialUser,
+    UserApi? api,
+    GoogleAuthService? google,
+    SessionStore? sessions,
+  })  : _api = api ?? userApi,
+        _google = google ?? googleAuthService,
+        _sessions = sessions ?? sessionStore,
+        super(AuthState(user: initialUser, isLoading: false));
+
+  final UserApi _api;
+  final GoogleAuthService _google;
+  final SessionStore _sessions;
 
   Future<bool> login(String username, String password) async {
     state = state.copyWith(isLoading: true);
     try {
-      // Demo bypass
-      if (username == 'demo' && password == 'demo') {
-        await Storage.setString(_userKey, username);
-        state = AuthState(user: username);
-        return true;
-      }
-      final ok = await userApi.login(username, password);
-      if (ok) {
-        await Storage.setString(_userKey, username);
-        state = AuthState(user: username);
+      final session = await _api.login(username, password);
+      if (session != null) {
+        await _startSession(session);
         return true;
       }
       state = state.copyWith(isLoading: false);
       return false;
     } catch (_) {
-      // Fallback to demo if network error
-      if (username == 'demo' && password == 'demo') {
-        await Storage.setString(_userKey, username);
-        state = AuthState(user: username);
-        return true;
-      }
       state = state.copyWith(isLoading: false);
       return false;
     }
   }
 
+  /// Signs in with Google: the plugin yields an ID token, the backend
+  /// verifies it and returns the username this account maps to.
+  ///
+  /// Returns null when the user dismissed the Google sheet (nothing to
+  /// report), or a message to display when sign-in genuinely failed.
+  Future<String?> loginWithGoogle() async {
+    state = state.copyWith(isLoading: true);
+    try {
+      final idToken = await _google.signInAndGetIdToken();
+      if (idToken == null) {
+        state = state.copyWith(isLoading: false);
+        return null;
+      }
+
+      final session = await _api.googleSignIn(idToken);
+      if (session == null) {
+        state = state.copyWith(isLoading: false);
+        return "Couldn't sign in with Google";
+      }
+
+      await _startSession(session);
+      return null;
+    } on GoogleAuthException catch (e) {
+      state = state.copyWith(isLoading: false);
+      return e.message;
+    } catch (_) {
+      state = state.copyWith(isLoading: false);
+      return "Couldn't reach the server. Check your connection.";
+    }
+  }
+
+  /// Links a Google account to the signed-in account, so "Continue with
+  /// Google" reaches this library afterwards. Doesn't touch [state]: the
+  /// user stays signed in as themselves whatever happens.
+  ///
+  /// Returns null if the user dismissed the Google sheet, otherwise whether
+  /// the link happened and a message to show.
+  Future<({bool linked, String message})?> linkGoogle() async {
+    try {
+      final idToken = await _google.signInAndGetIdToken();
+      if (idToken == null) return null;
+
+      final email = await _api.linkGoogle(idToken);
+      if (email == null) {
+        return (linked: false, message: "Couldn't link your Google account");
+      }
+      return (
+        linked: true,
+        message: email.isEmpty ? 'Google account linked' : 'Linked $email',
+      );
+    } on GoogleAuthException catch (e) {
+      return (linked: false, message: e.message);
+    } on DioException catch (e) {
+      // e.g. 409 "That Google account is already linked to another account"
+      final data = e.response?.data;
+      final detail = data is Map ? data['detail'] : null;
+      return (
+        linked: false,
+        message: detail is String && detail.isNotEmpty
+            ? detail
+            : "Couldn't reach the server. Check your connection.",
+      );
+    } catch (_) {
+      return (linked: false, message: "Couldn't link your Google account");
+    }
+  }
+
+  Future<void> _startSession(Session session) async {
+    await _sessions.save(session);
+    state = AuthState(user: session.username);
+  }
+
+  /// Drop the session without the user asking — used when the backend rejects
+  /// our token (expired, or the secret was rotated).
+  Future<void> onUnauthorized() => logout();
+
   Future<bool> register(String username, String password) async {
     state = state.copyWith(isLoading: true);
     try {
-      final ok = await userApi.register(username, password);
+      final ok = await _api.register(username, password);
       state = state.copyWith(isLoading: false);
       return ok;
     } catch (_) {
@@ -71,7 +147,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
-    await Storage.remove(_userKey);
+    // Clear the Google session too, or the next sign-in silently reuses the
+    // same account instead of letting the user pick one.
+    await _google.signOut();
+    await _sessions.clear();
     state = const AuthState();
   }
 }
