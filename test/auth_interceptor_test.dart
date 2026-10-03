@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audiobook_app/services/auth_interceptor.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,12 +19,25 @@ class _CapturingErrorHandler extends ErrorInterceptorHandler {
   void next(DioException err) => forwarded = err;
 }
 
-RequestOptions _request() => RequestOptions(path: '/novels');
-
-DioException _errorWithStatus(int status) => DioException(
-      requestOptions: _request(),
-      response: Response(requestOptions: _request(), statusCode: status),
+RequestOptions _request({String path = '/novels', String? sentToken}) =>
+    RequestOptions(
+      path: path,
+      headers: {if (sentToken != null) 'Authorization': 'Bearer $sentToken'},
     );
+
+/// A failed request that was sent with [sentToken] (the token the tests'
+/// interceptors hold, by default).
+DioException _errorWithStatus(
+  int status, {
+  String path = '/novels',
+  String? sentToken = 'abc123',
+}) {
+  final request = _request(path: path, sentToken: sentToken);
+  return DioException(
+    requestOptions: request,
+    response: Response(requestOptions: request, statusCode: status),
+  );
+}
 
 void main() {
   group('attaching the token', () {
@@ -127,6 +142,81 @@ void main() {
       interceptor.onError(_errorWithStatus(401), _CapturingErrorHandler());
 
       expect(calls, 1);
+    });
+
+    test('a rejected credential check does not sign the user out', () {
+      // e.g. /auth/google/link rejecting the Google token while signed in.
+      var calls = 0;
+      final interceptor = AuthInterceptor(
+        readToken: () => 'abc123',
+        onUnauthorized: () async => calls++,
+      );
+
+      for (final path in ['/userLogin', '/auth/google', '/auth/google/link']) {
+        final handler = _CapturingErrorHandler();
+        interceptor.onError(_errorWithStatus(401, path: path), handler);
+        expect(handler.forwarded, isNotNull, reason: path);
+      }
+      interceptor.onError(
+        _errorWithStatus(401, path: 'https://api.example.com/v1/auth/google/link'),
+        _CapturingErrorHandler(),
+      );
+
+      expect(calls, 0);
+    });
+
+    test('a late 401 for an older token does not sign out the new session', () {
+      var calls = 0;
+      final interceptor = AuthInterceptor(
+        readToken: () => 'fresh',
+        onUnauthorized: () async => calls++,
+      );
+
+      interceptor.onError(
+        _errorWithStatus(401, sentToken: 'expired'),
+        _CapturingErrorHandler(),
+      );
+      interceptor.onError(
+        _errorWithStatus(401, sentToken: null),
+        _CapturingErrorHandler(),
+      );
+
+      expect(calls, 0);
+    });
+
+    test('ignores a 401 when already signed out', () {
+      var calls = 0;
+      final interceptor = AuthInterceptor(
+        readToken: () => null,
+        onUnauthorized: () async => calls++,
+      );
+
+      interceptor.onError(_errorWithStatus(401), _CapturingErrorHandler());
+
+      expect(calls, 0);
+    });
+
+    test('a burst of 401s runs the handler once', () async {
+      var calls = 0;
+      final release = Completer<void>();
+      final interceptor = AuthInterceptor(
+        readToken: () => 'abc123',
+        onUnauthorized: () async {
+          calls++;
+          await release.future; // sign-out still in progress
+        },
+      );
+
+      for (var i = 0; i < 3; i++) {
+        interceptor.onError(_errorWithStatus(401), _CapturingErrorHandler());
+      }
+      expect(calls, 1);
+
+      // Once it finishes, a genuinely new rejection is handled again.
+      release.complete();
+      await Future<void>.delayed(Duration.zero);
+      interceptor.onError(_errorWithStatus(401), _CapturingErrorHandler());
+      expect(calls, 2);
     });
   });
 }

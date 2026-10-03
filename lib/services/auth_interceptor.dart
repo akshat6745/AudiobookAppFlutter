@@ -32,14 +32,41 @@ class AuthInterceptor extends Interceptor {
     handler.next(options);
   }
 
+  /// Endpoints whose 401 means "these credentials were rejected" (wrong
+  /// password, unverifiable Google token) rather than "your session expired".
+  /// The caller shows its own error; signing the user out would be wrong —
+  /// for `/auth/google/link` the user is signed in and should stay so.
+  static const _credentialPaths = ['/userLogin', '/auth/google', '/auth/google/link'];
+
+  /// Set while [_onUnauthorized] runs, so a burst of 401s (several requests
+  /// failing together) signs out and navigates once.
+  Future<void>? _unauthorizedInFlight;
+
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
     // 401 means the token is missing, expired, or no longer trusted. The
     // backend deliberately uses 401 (not 403) for all of those so this single
     // branch catches them.
-    if (err.response?.statusCode == 401) {
-      _onUnauthorized?.call();
+    if (err.response?.statusCode == 401 && _rejectsCurrentSession(err.requestOptions)) {
+      final onUnauthorized = _onUnauthorized;
+      if (onUnauthorized != null && _unauthorizedInFlight == null) {
+        _unauthorizedInFlight =
+            onUnauthorized().whenComplete(() => _unauthorizedInFlight = null);
+      }
     }
     handler.next(err);
+  }
+
+  /// Whether a 401 on [request] invalidates the *current* session: it must
+  /// not be a credential check, and it must have carried the token we hold
+  /// now. A request sent with an older token (or none) that fails after the
+  /// user signed in again says nothing about the new session.
+  bool _rejectsCurrentSession(RequestOptions request) {
+    // endsWith: `path` may be a full URL if a base URL with a prefix is used.
+    final path = Uri.parse(request.path).path;
+    if (_credentialPaths.any(path.endsWith)) return false;
+    final token = readToken();
+    if (token == null || token.isEmpty) return false;
+    return request.headers['Authorization'] == 'Bearer $token';
   }
 }
