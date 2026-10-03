@@ -3,10 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/auth_providers.dart';
-import '../providers/backend_provider.dart';
 import '../providers/progress_providers.dart';
 import '../theme/app_theme.dart';
-import '../widgets/backend_picker.dart';
 import '../widgets/tts_mode_selector.dart';
 import '../widgets/tts_model_download_tile.dart';
 
@@ -17,7 +15,6 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authProvider).user ?? '—';
     final progress = ref.watch(progressProvider);
-    final backend = ref.watch(backendProvider);
 
     return SafeArea(
       child: ListView(
@@ -56,12 +53,6 @@ class ProfileScreen extends ConsumerWidget {
                 )),
           const SizedBox(height: 24),
           const _LinkGoogleButton(),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: () => showBackendPicker(context),
-            icon: const Icon(Icons.dns),
-            label: Text('Backend: ${backend.label}'),
-          ),
           const SizedBox(height: 24),
           Text(
             'Offline Playback',

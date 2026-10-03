@@ -21,7 +21,6 @@ import 'services/tts/kokoro_voices.dart';
 import 'services/tts/remote_tts_engine.dart';
 import 'services/tts/tts_engine.dart';
 import 'theme/app_theme.dart';
-import 'widgets/backend_picker.dart';
 
 /// Attaches the access token to backend requests. Held here so the app widget
 /// can register its "token rejected" handler once the router exists.
@@ -51,10 +50,6 @@ Future<void> main() async {
   // handler is registered once the app widget exists (it owns the router) —
   // see _AudiobookAppState.initState.
   apiClient.interceptors.add(_authInterceptor);
-
-  // Resolve the persisted backend URL before any API wrapper fires its
-  // first request — apiClient's baseUrl needs to be set up front.
-  await loadStoredBackend();
 
   // Single AudioCacheManager instance shared by handler and providers so the
   // UI reads the same cache that's feeding the player.
@@ -232,24 +227,6 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
       theme: buildTheme(),
       routerConfig: _router,
       debugShowCheckedModeBanner: false,
-      // Keep the children list shape stable across rebuilds — falling
-      // back to a const placeholder when `child` is briefly null avoids
-      // child slots shifting (which makes Flutter rebuild/reparent the
-      // BackendPickerOverlayButton between Stack positions and triggers
-      // assertions like `_dependents.isEmpty`).
-      builder: (context, child) => Stack(
-        children: [
-          child ?? const SizedBox.shrink(),
-          // Pinned bottom-left so the icon stays clear of the usual top
-          // action zone (back button, prev/next, download) and clear of
-          // the bottom nav + mini player.
-          const Positioned(
-            left: 8,
-            bottom: 96,
-            child: BackendPickerOverlayButton(),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -20,7 +20,7 @@ Complete blueprint of the React Native app (`audiobook-mobile`) to be reproduced
 
 ## 2. Backend API
 
-Base URL: `https://audiobook-python.onrender.com` (override per-env).
+Base URL: `https://34.3.108.45.sslip.io` (GCP e2 instance; `--dart-define=API_BASE_URL=...` overrides for local testing).
 
 ### Endpoints used
 
