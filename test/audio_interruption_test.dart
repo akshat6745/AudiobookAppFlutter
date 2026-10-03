@@ -3,71 +3,65 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 
 void main() {
-  group('decideInterruptionPause', () {
-    test('pauses when actively playing mid-paragraph', () {
-      expect(
-        decideInterruptionPause(
-          playing: true,
-          processingState: ProcessingState.ready,
-        ),
-        InterruptionPauseDecision.pause,
-      );
-    });
-
+  group('decideInterruptionResume', () {
     test(
-      'pauses when the paragraph already completed right before the '
-      'interruption (the <1s-remaining race)',
+      'resumes a loaded paragraph — whether paused mid-playback or loaded '
+      'during the interruption (it landed between paragraphs)',
       () {
+        // Between paragraphs the player is deliberately paused, so `playing`
+        // was false when the interruption began — intent drives the resume.
         expect(
-          decideInterruptionPause(
-            playing: false,
-            processingState: ProcessingState.completed,
+          decideInterruptionResume(
+            wantsPlayback: true,
+            loadInFlight: false,
+            processingState: ProcessingState.ready,
           ),
-          InterruptionPauseDecision.pause,
+          InterruptionResumeDecision.resume,
         );
       },
     );
 
-    test('ignores when the user had already manually paused', () {
-      expect(
-        decideInterruptionPause(
-          playing: false,
-          processingState: ProcessingState.ready,
-        ),
-        InterruptionPauseDecision.ignore,
-      );
-    });
-  });
+    test(
+      'leaves an in-flight paragraph load to start playback itself '
+      '(advancing here would skip that paragraph)',
+      () {
+        for (final state in ProcessingState.values) {
+          expect(
+            decideInterruptionResume(
+              wantsPlayback: true,
+              loadInFlight: true,
+              processingState: state,
+            ),
+            InterruptionResumeDecision.ignore,
+            reason: 'processingState=$state',
+          );
+        }
+      },
+    );
 
-  group('decideInterruptionResume', () {
-    test('advances when the paragraph had completed by the time we resume', () {
+    test('advances when the source completed and nothing is loading', () {
       expect(
         decideInterruptionResume(
-          pausedByInterruption: true,
+          wantsPlayback: true,
+          loadInFlight: false,
           processingState: ProcessingState.completed,
         ),
         InterruptionResumeDecision.advance,
       );
     });
 
-    test('resumes when the paragraph is still mid-playback', () {
-      expect(
-        decideInterruptionResume(
-          pausedByInterruption: true,
-          processingState: ProcessingState.ready,
-        ),
-        InterruptionResumeDecision.resume,
-      );
-    });
-
-    test('ignores when this interruption never paused us', () {
-      expect(
-        decideInterruptionResume(
-          pausedByInterruption: false,
-          processingState: ProcessingState.completed,
-        ),
-        InterruptionResumeDecision.ignore,
-      );
+    test('stays paused when the user paused before or during it', () {
+      for (final state in ProcessingState.values) {
+        expect(
+          decideInterruptionResume(
+            wantsPlayback: false,
+            loadInFlight: false,
+            processingState: state,
+          ),
+          InterruptionResumeDecision.ignore,
+          reason: 'processingState=$state',
+        );
+      }
     });
   });
 }

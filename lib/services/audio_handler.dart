@@ -7,43 +7,33 @@ import 'package:just_audio/just_audio.dart';
 
 import 'audio_cache_manager.dart';
 
-/// Whether an [AudioInterruptionType.pause]/[AudioInterruptionType.unknown]
-/// interruption beginning should pause the player.
-enum InterruptionPauseDecision { pause, ignore }
-
-/// What to do when a [AudioInterruptionType.pause] interruption we paused
-/// for ends.
+/// What to do when a transient ([AudioInterruptionType.pause]) interruption
+/// ends.
 enum InterruptionResumeDecision { resume, advance, ignore }
 
-/// Decides whether an interruption beginning should pause playback.
+/// Decides how to resume when a transient interruption ends.
 ///
-/// `playing` alone isn't enough: if the paragraph's last ~1s elapses right
-/// as the interruption begins, the player can already be at
-/// [ProcessingState.completed] with `playing == false` (platform-dependent
-/// timing), even though playback was active a moment ago. Treating
-/// `completed` as "was active" too — safe because a manual pause never
-/// reaches `completed` — is what makes the pause/resume symmetric regardless
-/// of how much of the paragraph was left when the interruption hit.
-@visibleForTesting
-InterruptionPauseDecision decideInterruptionPause({
-  required bool playing,
-  required ProcessingState processingState,
-}) {
-  final wasActive = playing || processingState == ProcessingState.completed;
-  return wasActive ? InterruptionPauseDecision.pause : InterruptionPauseDecision.ignore;
-}
-
-/// Decides how to resume when a [AudioInterruptionType.pause] interruption
-/// we paused for ends. If the paragraph had already reached its end during/
-/// around the interruption, resuming the same (completed) source is a no-op
-/// — advance to the next paragraph instead, via the same path the normal
-/// completion listener uses.
+/// Keyed on *intent* ([wantsPlayback]) rather than the player's momentary
+/// `playing` flag, because an interruption often lands between paragraphs —
+/// while the next one is being synthesized the player is deliberately paused,
+/// yet the user still expects narration to continue afterwards.
+///
+/// - Not wanting playback (user paused, before or during the interruption)
+///   → stay paused.
+/// - A paragraph load is still in flight → do nothing here; that load starts
+///   playback itself once it completes, now that the interruption is over.
+///   (Advancing here would skip the paragraph being loaded.)
+/// - The source already finished (e.g. auto-advance was waiting on the next
+///   chapter's content) → take the normal auto-advance path, which is
+///   de-duplicated per paragraph.
+/// - Otherwise → resume the loaded source.
 @visibleForTesting
 InterruptionResumeDecision decideInterruptionResume({
-  required bool pausedByInterruption,
+  required bool wantsPlayback,
+  required bool loadInFlight,
   required ProcessingState processingState,
 }) {
-  if (!pausedByInterruption) return InterruptionResumeDecision.ignore;
+  if (!wantsPlayback || loadInFlight) return InterruptionResumeDecision.ignore;
   return processingState == ProcessingState.completed
       ? InterruptionResumeDecision.advance
       : InterruptionResumeDecision.resume;
@@ -77,7 +67,11 @@ class AudiobookCallbacks {
 /// Single source of truth for playback. Drives just_audio and publishes
 /// MediaSession state via audio_service.
 class AudiobookHandler extends BaseAudioHandler with SeekHandler {
-  final AudioPlayer _player = AudioPlayer();
+  /// just_audio's built-in interruption handling is disabled: it keeps its
+  /// own "was playing" flag that knows nothing about paragraph transitions,
+  /// and running it alongside [_onInterruption] made the two fight (each
+  /// pausing/resuming on different state). This handler is the sole owner.
+  final AudioPlayer _player = AudioPlayer(handleInterruptions: false);
   final AudioCacheManager cache;
 
   List<String> _paragraphs = const [];
@@ -115,11 +109,23 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   /// and only it, not a user-chosen volume — when the interruption ends.
   bool _duckedByInterruption = false;
 
-  /// Set while we've auto-paused for an [AudioInterruptionType.pause]
-  /// interruption (e.g. a phone call). Only an interruption *we* paused for
-  /// should trigger auto-resume; a manual pause during the interruption
-  /// must stay paused.
-  bool _pausedByInterruption = false;
+  /// Whether narration *should* be playing — true from a play request
+  /// ([playParagraph], [play]) until the user pauses/stops or a load fails.
+  /// Unlike `_player.playing`, this stays true across the deliberate pause
+  /// between paragraphs, so an interruption that lands during a paragraph
+  /// transition still resumes afterwards; a manual pause clears it so the
+  /// interruption ending never overrides the user.
+  bool _wantsPlayback = false;
+
+  /// Set while a transient interruption ([AudioInterruptionType.pause], e.g.
+  /// a phone call or notification sound) is in progress. Blocks
+  /// [playParagraph] from starting playback mid-interruption — the loaded
+  /// paragraph waits and plays when the interruption ends.
+  bool _transientInterruption = false;
+
+  /// Number of [playParagraph] calls currently resolving audio / loading the
+  /// source.
+  int _loadsInFlight = 0;
 
   AudiobookHandler({required this.cache}) {
     _wireStreams();
@@ -172,9 +178,11 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     required String paragraphText,
   }) async {
     final gen = _generation;
+    _loadsInFlight++;
     try {
       _currentIndex = paragraphIndex;
       _lastCompletedIndex = null;
+      _wantsPlayback = true;
       _emitPlaybackState(isLoading: true);
 
       final audio = await cache.getAudio(
@@ -186,6 +194,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
       if (!_isCurrent(gen, paragraphIndex)) return false;
 
       if (audio == null || !audio.isValid) {
+        _wantsPlayback = false;
         _emitPlaybackState(isLoading: false);
         return false;
       }
@@ -224,11 +233,25 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
       if (!_isCurrent(gen, paragraphIndex)) return false;
 
-      await _player.play();
+      // Mid-interruption (e.g. on a call): keep the paragraph loaded but
+      // silent; [_onInterruption] resumes it when the interruption ends.
+      // Likewise if the user paused (or headphones were unplugged) while
+      // this paragraph was loading.
+      if (_transientInterruption || !_wantsPlayback) {
+        _emitPlaybackState();
+        return _wantsPlayback;
+      }
+
+      // Not awaited: just_audio's play() only completes once playback
+      // pauses or stops, which would keep this load counted as in flight.
+      unawaited(_player.play().catchError((Object _) {}));
       return true;
     } catch (_) {
+      if (_isCurrent(gen, paragraphIndex)) _wantsPlayback = false;
       _emitPlaybackState(isLoading: false);
       return false;
+    } finally {
+      _loadsInFlight--;
     }
   }
 
@@ -238,17 +261,28 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   bool _isCurrent(int gen, int paragraphIndex) =>
       gen == _generation && _currentIndex == paragraphIndex;
 
+  /// An explicit play request (UI, notification, headset) — the user's
+  /// choice overrides any interruption in progress.
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() {
+    _wantsPlayback = true;
+    _transientInterruption = false;
+    return _player.play();
+  }
 
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> pause() {
+    _wantsPlayback = false;
+    return _player.pause();
+  }
 
   @override
   Future<void> stop() async {
     // Track whether this stop originated from a remote/notification action
     // so we can fire the coordinator callback exactly once.
     final wasActive = _currentIndex != null;
+    _wantsPlayback = false;
+    _transientInterruption = false;
     // Reset state up-front so any in-flight stream events — or a
     // `playParagraph` call already in flight — don't re-trigger auto-advance
     // or a stale play against an index/session that no longer exists.
@@ -326,9 +360,9 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> toggle() async {
     if (_player.playing) {
-      await _player.pause();
+      await pause();
     } else {
-      await _player.play();
+      await play();
     }
   }
 
@@ -357,7 +391,10 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     _becomingNoisySub = session.becomingNoisyEventStream.listen((_) {
       // Headphones/Bluetooth disconnected — pause immediately so audio
       // doesn't suddenly blast out of the speaker.
-      if (_player.playing) _player.pause();
+      // Also covers the gap while the next paragraph is loading (player
+      // paused but [_wantsPlayback] still set), so it doesn't start on the
+      // speaker once loaded.
+      pause();
     });
   }
 
@@ -371,17 +408,17 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           _player.setVolume(0.3);
           break;
         case AudioInterruptionType.pause:
+          // Transient: phone call, alarm, or a notification sound (the
+          // speech session config pauses rather than ducks for those).
+          // Android always follows up with an end event.
+          _transientInterruption = true;
+          _player.pause();
+          break;
         case AudioInterruptionType.unknown:
-          // Phone call / another app took audio focus — pause; only resume
-          // automatically if we're the one who paused it.
-          final decision = decideInterruptionPause(
-            playing: _player.playing,
-            processingState: _player.processingState,
-          );
-          if (decision == InterruptionPauseDecision.pause) {
-            _pausedByInterruption = true;
-            _player.pause();
-          }
+          // iOS: any interruption beginning (its end may still ask us to
+          // resume). Android: another app took focus permanently — no end
+          // event follows, so the next user play request resumes.
+          _player.pause();
           break;
       }
     } else {
@@ -393,11 +430,14 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           }
           break;
         case AudioInterruptionType.pause:
+          // Android: transient focus regained. iOS: interruption ended
+          // with `shouldResume`.
+          _transientInterruption = false;
           final decision = decideInterruptionResume(
-            pausedByInterruption: _pausedByInterruption,
+            wantsPlayback: _wantsPlayback,
+            loadInFlight: _loadsInFlight > 0,
             processingState: _player.processingState,
           );
-          _pausedByInterruption = false;
           switch (decision) {
             case InterruptionResumeDecision.resume:
               _player.play();
@@ -410,7 +450,8 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           }
           break;
         case AudioInterruptionType.unknown:
-          _pausedByInterruption = false;
+          // iOS ended without `shouldResume` — stay paused.
+          _transientInterruption = false;
           break;
       }
     }
