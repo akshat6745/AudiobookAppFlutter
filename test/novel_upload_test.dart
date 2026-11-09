@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:audiobook_app/models/novel.dart';
 import 'package:audiobook_app/services/novel_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -37,5 +38,31 @@ void main() {
 
     // A username here used to decide which account owned the upload.
     expect(formData.fields, isEmpty);
+  });
+
+  test('Novel.fromJson parses isOwner so only owned uploads show Delete', () {
+    final owned = Novel.fromJson({
+      'id': 'my-book-1',
+      'slug': 'my-book-1',
+      'title': 'My Book',
+      'author': 'Author',
+      'chapterCount': 10,
+      'source': 'cloudflare_d1',
+      'isPublic': false,
+      'isOwner': true,
+    });
+    final publicBook = Novel.fromJson({
+      'id': 'dracula',
+      'slug': 'dracula',
+      'title': 'Dracula',
+      'author': 'Bram Stoker',
+      'chapterCount': 27,
+      'source': 'cloudflare_d1',
+      'isPublic': true,
+    });
+
+    expect(owned.slug, 'my-book-1');
+    expect(owned.isOwner, isTrue);
+    expect(publicBook.isOwner, isFalse);
   });
 }

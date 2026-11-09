@@ -12,7 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Stands in for the plugin-backed service, which needs platform channels.
 class FakeGoogleAuthService extends GoogleAuthService {
   FakeGoogleAuthService({this.idToken, this.error})
-      : super(serverClientId: 'test.apps.googleusercontent.com');
+    : super(serverClientId: 'test.apps.googleusercontent.com');
 
   /// Null models the user dismissing the Google sheet.
   final String? idToken;
@@ -30,11 +30,12 @@ class FakeGoogleAuthService extends GoogleAuthService {
 }
 
 class FakeUserApi extends UserApi {
-  FakeUserApi({this.username, this.throwOnGoogle = false});
+  FakeUserApi({this.username, this.throwOnGoogle = false, this.googleError});
 
   /// Null models the backend rejecting the ID token.
   final String? username;
   final bool throwOnGoogle;
+  final DioException? googleError;
   final List<String> receivedTokens = [];
 
   /// Rejects every password, standing in for a backend 401. Overridden so
@@ -45,6 +46,16 @@ class FakeUserApi extends UserApi {
   /// What a link attempt returns: the linked email, or a backend rejection.
   String? linkedEmail = 'me@gmail.com';
   DioException? linkError;
+  bool deleteAccountResult = true;
+  DioException? deleteError;
+  int deleteCalls = 0;
+
+  @override
+  Future<bool> deleteAccount() async {
+    deleteCalls++;
+    if (deleteError != null) throw deleteError!;
+    return deleteAccountResult;
+  }
 
   @override
   Future<String?> linkGoogle(String idToken) async {
@@ -56,6 +67,7 @@ class FakeUserApi extends UserApi {
   @override
   Future<Session?> googleSignIn(String idToken) async {
     receivedTokens.add(idToken);
+    if (googleError != null) throw googleError!;
     if (throwOnGoogle) throw Exception('network down');
     final name = username;
     if (name == null) return null;
@@ -115,7 +127,9 @@ void main() {
       final google = FakeGoogleAuthService(idToken: 'id-token-123');
       final container = _containerWith(api: api, google: google);
 
-      final error = await container.read(authProvider.notifier).loginWithGoogle();
+      final error = await container
+          .read(authProvider.notifier)
+          .loginWithGoogle();
 
       expect(error, isNull);
       expect(container.read(authProvider).user, 'reader@gmail.com');
@@ -137,32 +151,40 @@ void main() {
       expect(sessions.current?.token, isNotEmpty);
     });
 
-    test('a backend response without an access token is not a sign-in', () async {
-      // FakeUserApi returns null when there's no username to build a session
-      // from — mirroring a response missing its access_token.
-      final container = _containerWith(
-        api: FakeUserApi(username: null),
-        google: FakeGoogleAuthService(idToken: 'id-token-123'),
-      );
+    test(
+      'a backend response without an access token is not a sign-in',
+      () async {
+        // FakeUserApi returns null when there's no username to build a session
+        // from — mirroring a response missing its access_token.
+        final container = _containerWith(
+          api: FakeUserApi(username: null),
+          google: FakeGoogleAuthService(idToken: 'id-token-123'),
+        );
 
-      await container.read(authProvider.notifier).loginWithGoogle();
+        await container.read(authProvider.notifier).loginWithGoogle();
 
-      expect(container.read(authProvider).user, isNull);
-      expect(sessions.current, isNull);
-    });
+        expect(container.read(authProvider).user, isNull);
+        expect(sessions.current, isNull);
+      },
+    );
 
-    test('cancelled sign-in reports no error and leaves user signed out', () async {
-      final container = _containerWith(
-        api: FakeUserApi(username: 'reader@gmail.com'),
-        google: FakeGoogleAuthService(idToken: null),
-      );
+    test(
+      'cancelled sign-in reports no error and leaves user signed out',
+      () async {
+        final container = _containerWith(
+          api: FakeUserApi(username: 'reader@gmail.com'),
+          google: FakeGoogleAuthService(idToken: null),
+        );
 
-      final error = await container.read(authProvider.notifier).loginWithGoogle();
+        final error = await container
+            .read(authProvider.notifier)
+            .loginWithGoogle();
 
-      expect(error, isNull, reason: 'dismissing the sheet is not a failure');
-      expect(container.read(authProvider).user, isNull);
-      expect(container.read(authProvider).isLoading, isFalse);
-    });
+        expect(error, isNull, reason: 'dismissing the sheet is not a failure');
+        expect(container.read(authProvider).user, isNull);
+        expect(container.read(authProvider).isLoading, isFalse);
+      },
+    );
 
     test('surfaces the message when Google sign-in fails', () async {
       final container = _containerWith(
@@ -172,7 +194,9 @@ void main() {
         ),
       );
 
-      final error = await container.read(authProvider.notifier).loginWithGoogle();
+      final error = await container
+          .read(authProvider.notifier)
+          .loginWithGoogle();
 
       expect(error, 'Google sign-in is misconfigured');
       expect(container.read(authProvider).user, isNull);
@@ -184,11 +208,62 @@ void main() {
         google: FakeGoogleAuthService(idToken: 'id-token-123'),
       );
 
-      final error = await container.read(authProvider.notifier).loginWithGoogle();
+      final error = await container
+          .read(authProvider.notifier)
+          .loginWithGoogle();
 
       expect(error, isNotNull);
       expect(container.read(authProvider).user, isNull);
     });
+
+    test(
+      'a rejected Google token is not reported as a connection failure',
+      () async {
+        final container = _containerWith(
+          api: FakeUserApi(
+            googleError: DioException(
+              requestOptions: RequestOptions(path: '/auth/google'),
+              response: Response(
+                requestOptions: RequestOptions(path: '/auth/google'),
+                statusCode: 401,
+                data: {'detail': 'Could not verify Google sign-in'},
+              ),
+            ),
+          ),
+          google: FakeGoogleAuthService(idToken: 'id-token-123'),
+        );
+
+        final error = await container
+            .read(authProvider.notifier)
+            .loginWithGoogle();
+
+        expect(error, "Couldn't sign in with Google");
+        expect(container.read(authProvider).user, isNull);
+        expect(sessions.current, isNull);
+      },
+    );
+
+    test(
+      'a server the phone cannot reach is not a rejected Google token',
+      () async {
+        final container = _containerWith(
+          api: FakeUserApi(
+            googleError: DioException(
+              requestOptions: RequestOptions(path: '/auth/google'),
+              type: DioExceptionType.connectionError,
+            ),
+          ),
+          google: FakeGoogleAuthService(idToken: 'id-token-123'),
+        );
+
+        final error = await container
+            .read(authProvider.notifier)
+            .loginWithGoogle();
+
+        expect(error, "Couldn't reach the server. Check your connection.");
+        expect(container.read(authProvider).user, isNull);
+      },
+    );
 
     test('reports an error when the request throws', () async {
       final container = _containerWith(
@@ -196,7 +271,9 @@ void main() {
         google: FakeGoogleAuthService(idToken: 'id-token-123'),
       );
 
-      final error = await container.read(authProvider.notifier).loginWithGoogle();
+      final error = await container
+          .read(authProvider.notifier)
+          .loginWithGoogle();
 
       expect(error, isNotNull);
       expect(container.read(authProvider).user, isNull);
@@ -215,8 +292,10 @@ void main() {
 
     test('links and reports the Google email', () async {
       final api = FakeUserApi();
-      final container =
-          await signedInAs(api, FakeGoogleAuthService(idToken: 'id-token-123'));
+      final container = await signedInAs(
+        api,
+        FakeGoogleAuthService(idToken: 'id-token-123'),
+      );
 
       final result = await container.read(authProvider.notifier).linkGoogle();
 
@@ -229,7 +308,9 @@ void main() {
       // Linking adds a way in; it must not swap the session for a
       // Gmail-named one.
       final container = await signedInAs(
-          FakeUserApi(), FakeGoogleAuthService(idToken: 'id-token-123'));
+        FakeUserApi(),
+        FakeGoogleAuthService(idToken: 'id-token-123'),
+      );
 
       await container.read(authProvider.notifier).linkGoogle();
 
@@ -239,8 +320,10 @@ void main() {
 
     test('a dismissed Google sheet returns null and changes nothing', () async {
       final api = FakeUserApi();
-      final container =
-          await signedInAs(api, FakeGoogleAuthService(idToken: null));
+      final container = await signedInAs(
+        api,
+        FakeGoogleAuthService(idToken: null),
+      );
 
       expect(await container.read(authProvider.notifier).linkGoogle(), isNull);
       expect(api.receivedTokens, isEmpty);
@@ -253,17 +336,24 @@ void main() {
           response: Response(
             requestOptions: RequestOptions(path: '/auth/google/link'),
             statusCode: 409,
-            data: {'detail': 'That Google account is already linked to another account'},
+            data: {
+              'detail':
+                  'That Google account is already linked to another account',
+            },
           ),
         );
-      final container =
-          await signedInAs(api, FakeGoogleAuthService(idToken: 'id-token-123'));
+      final container = await signedInAs(
+        api,
+        FakeGoogleAuthService(idToken: 'id-token-123'),
+      );
 
       final result = await container.read(authProvider.notifier).linkGoogle();
 
       expect(result?.linked, isFalse);
-      expect(result?.message,
-          'That Google account is already linked to another account');
+      expect(
+        result?.message,
+        'That Google account is already linked to another account',
+      );
       expect(container.read(authProvider).user, 'Akshat');
     });
 
@@ -321,6 +411,61 @@ void main() {
     });
   });
 
+  group('deleteAccount', () {
+    test('deletes the account on the server and clears the local session',
+        () async {
+      final api = FakeUserApi();
+      final google = FakeGoogleAuthService();
+      await sessions.save(
+        const Session(username: 'reader@gmail.com', token: 'some-token'),
+      );
+      final container = _containerWith(
+        api: api,
+        google: google,
+        initialUser: 'reader@gmail.com',
+      );
+
+      final error = await container.read(authProvider.notifier).deleteAccount();
+
+      expect(error, isNull);
+      expect(api.deleteCalls, 1);
+      expect(container.read(authProvider).user, isNull);
+      expect(sessions.current, isNull);
+      expect(google.signOutCalls, 1);
+    });
+
+    test('surfaces server error and keeps user signed in on failure', () async {
+      final api = FakeUserApi()
+        ..deleteError = DioException(
+          requestOptions: RequestOptions(path: '/user/account'),
+          response: Response(
+            requestOptions: RequestOptions(path: '/user/account'),
+            statusCode: 403,
+            data: {
+              'detail': 'This system account cannot be deleted via self-service.'
+            },
+          ),
+        );
+      await sessions.save(
+        const Session(username: 'Akshat', token: 'some-token'),
+      );
+      final container = _containerWith(
+        api: api,
+        google: FakeGoogleAuthService(),
+        initialUser: 'Akshat',
+      );
+
+      final error = await container.read(authProvider.notifier).deleteAccount();
+
+      expect(
+        error,
+        'This system account cannot be deleted via self-service.',
+      );
+      expect(container.read(authProvider).user, 'Akshat');
+      expect(sessions.current?.token, 'some-token');
+    });
+  });
+
   group('demo bypass removal', () {
     test('demo/demo is rejected like any other bad credentials', () async {
       // The old code special-cased demo/demo both up front and in the
@@ -330,9 +475,11 @@ void main() {
         google: FakeGoogleAuthService(),
       );
 
-      final ok = await container.read(authProvider.notifier).login('demo', 'demo');
+      final error = await container
+          .read(authProvider.notifier)
+          .login('demo', 'demo');
 
-      expect(ok, isFalse);
+      expect(error, isNotNull);
       expect(container.read(authProvider).user, isNull);
       expect(sessions.current, isNull);
     });
@@ -345,7 +492,7 @@ void main() {
 
       expect(
         await container.read(authProvider.notifier).login('akshat', 'wrong'),
-        isFalse,
+        isNotNull,
       );
       expect(sessions.current, isNull);
     });

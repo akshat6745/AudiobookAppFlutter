@@ -52,6 +52,15 @@ class NovelApi {
     );
     return NovelUploadResponse.fromJson(res.data as Map<String, dynamic>);
   }
+
+  /// Deletes a novel uploaded by the signed-in caller (`DELETE /novel/{slug}`).
+  Future<bool> deleteNovel(String slug) async {
+    final res = await apiClient.delete(
+      '/novel/${Uri.encodeComponent(slug)}',
+    );
+    final data = res.data;
+    return data is Map<String, dynamic> && data['deleted'] == true;
+  }
 }
 
 final novelApi = NovelApi();

@@ -17,7 +17,7 @@ class GoogleAuthException implements Exception {
 /// and decides which account it maps to.
 class GoogleAuthService {
   GoogleAuthService({String? serverClientId})
-      : serverClientId = serverClientId ?? defaultServerClientId;
+    : serverClientId = serverClientId ?? defaultServerClientId;
 
   /// The **Web** OAuth client ID — on Android the ID token is minted for that
   /// audience, and the backend verifies against the same value. Supplied at
@@ -28,8 +28,9 @@ class GoogleAuthService {
   /// ```
   ///
   /// Not a secret (OAuth client IDs are public), just environment-specific.
-  static const defaultServerClientId =
-      String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+  static const defaultServerClientId = String.fromEnvironment(
+    'GOOGLE_SERVER_CLIENT_ID',
+  );
 
   final String serverClientId;
 
@@ -68,19 +69,16 @@ class GoogleAuthService {
     try {
       account = await GoogleSignIn.instance.authenticate();
     } on GoogleSignInException catch (e) {
-      // A dismissed sheet is a normal outcome, not an error to report.
-      if (e.code == GoogleSignInExceptionCode.canceled) return null;
-      if (e.code == GoogleSignInExceptionCode.clientConfigurationError) {
-        // Nearly always a missing/mismatched Android OAuth client: the
-        // package name plus signing SHA-1 must be registered in Google Cloud.
-        throw const GoogleAuthException(
-          'Google sign-in is misconfigured for this app build',
-        );
-      }
-      throw const GoogleAuthException("Couldn't sign in with Google");
+      final message = googleSignInFailureMessage(e);
+      if (message == null) return null;
+      throw GoogleAuthException(message);
     }
 
-    return account.authentication.idToken;
+    // An account with no ID token is not a dismissed sheet. Android reports
+    // that when this build's package and signing certificate are not
+    // registered, and treating it as cancellation leaves the login screen
+    // unchanged.
+    return requireGoogleIdToken(account.authentication.idToken);
   }
 
   Future<void> signOut() async {
@@ -95,3 +93,50 @@ class GoogleAuthService {
 }
 
 final googleAuthService = GoogleAuthService();
+
+/// Message to show for a plugin failure, or null when the user dismissed
+/// the account sheet.
+///
+/// Credential Manager reports some missing Android OAuth clients (package
+/// name plus signing SHA-1) as [GoogleSignInExceptionCode.canceled] after the
+/// user has already picked an account. Those descriptions are not a dismissal.
+String? googleSignInFailureMessage(GoogleSignInException error) {
+  final misconfigured =
+      error.code == GoogleSignInExceptionCode.clientConfigurationError ||
+      error.code == GoogleSignInExceptionCode.providerConfigurationError ||
+      (error.code == GoogleSignInExceptionCode.canceled &&
+          _cancelLooksLikeMisconfiguration(error));
+  if (error.code == GoogleSignInExceptionCode.canceled && !misconfigured) {
+    return null;
+  }
+  if (misconfigured) {
+    return 'Google sign-in is misconfigured for this app build';
+  }
+  return "Couldn't sign in with Google";
+}
+
+bool _cancelLooksLikeMisconfiguration(GoogleSignInException error) {
+  final text = '${error.description ?? ''} ${error.details ?? ''}'
+      .toLowerCase();
+  const markers = [
+    'reauth',
+    'developer',
+    'sha',
+    'misconfigured',
+    '28444',
+    '10:',
+    'configuration',
+  ];
+  return markers.any(text.contains);
+}
+
+/// The ID token the backend verifies. Empty means Google accepted the account
+/// but did not mint a token for this app build.
+String requireGoogleIdToken(String? idToken) {
+  if (idToken == null || idToken.isEmpty) {
+    throw const GoogleAuthException(
+      'Google sign-in is misconfigured for this app build',
+    );
+  }
+  return idToken;
+}

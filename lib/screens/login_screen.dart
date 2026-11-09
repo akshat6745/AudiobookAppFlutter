@@ -158,19 +158,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _submitting = true;
       _error = null;
     });
-    final ok = await ref.read(authProvider.notifier).login(
+    final error = await ref.read(authProvider.notifier).login(
           _username.text.trim(),
           _password.text,
         );
     if (!mounted) return;
-    if (ok) {
+    if (error == null) {
       // Tell Android to prompt saving credentials to Password Manager.
       TextInput.finishAutofillContext();
       context.go('/novels');
     } else {
       setState(() {
         _submitting = false;
-        _error = 'Invalid username or password';
+        _error = error;
       });
     }
   }

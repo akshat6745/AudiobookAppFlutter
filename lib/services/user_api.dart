@@ -49,6 +49,13 @@ class UserApi {
     return (data['email'] as String?) ?? '';
   }
 
+  /// Permanently deletes the signed-in caller's account and reading progress.
+  Future<bool> deleteAccount() async {
+    final res = await apiClient.delete('/user/account');
+    final data = res.data;
+    return data is Map<String, dynamic> && data['deleted'] == true;
+  }
+
   /// Parses a sign-in response. A session needs both an access token and a
   /// username; anything less counts as a failed sign-in.
   Session? _sessionFrom(dynamic body, {String? fallbackUsername}) {

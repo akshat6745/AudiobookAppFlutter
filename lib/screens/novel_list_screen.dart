@@ -95,6 +95,51 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
     );
   }
 
+  Future<void> _confirmAndDeleteNovel(Novel novel) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Novel?'),
+        content: Text(
+          'Delete "${novel.title}" from your library? This only deletes the copy you uploaded.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final ok = await novelApi.deleteNovel(novel.slug);
+      if (!mounted) return;
+      if (ok) {
+        _showMessage('Deleted "${novel.title}".');
+        ref.invalidate(_novelsFutureProvider);
+        ref.read(progressProvider.notifier).refresh(force: true);
+      } else {
+        _showMessage('Could not delete "${novel.title}".');
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final detail = e.response?.data is Map
+          ? (e.response?.data as Map)['detail'] as String?
+          : null;
+      _showMessage(detail ?? 'Could not delete "${novel.title}".');
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Could not delete "${novel.title}".');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(_novelsFutureProvider);
@@ -204,7 +249,11 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
                     itemBuilder: (_, i) {
                       final n = filtered[i];
                       final lastChapter = progress[n.slug];
-                      return _NovelCard(novel: n, lastChapter: lastChapter);
+                      return _NovelCard(
+                        novel: n,
+                        lastChapter: lastChapter,
+                        onDelete: n.isOwner ? () => _confirmAndDeleteNovel(n) : null,
+                      );
                     },
                   ),
                 );
@@ -218,9 +267,14 @@ class _NovelListScreenState extends ConsumerState<NovelListScreen> {
 }
 
 class _NovelCard extends StatelessWidget {
-  const _NovelCard({required this.novel, required this.lastChapter});
+  const _NovelCard({
+    required this.novel,
+    required this.lastChapter,
+    this.onDelete,
+  });
   final Novel novel;
   final int? lastChapter;
+  final VoidCallback? onDelete;
 
   // Displayed at 70x100 logical pixels — cap the decoded bitmap to that size
   // (times device pixel ratio) instead of whatever resolution the backend
@@ -321,6 +375,16 @@ class _NovelCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onDelete != null)
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: AppColors.textMuted,
+                    size: 20,
+                  ),
+                  tooltip: 'Delete novel',
+                  onPressed: onDelete,
+                ),
             ],
           ),
         ),

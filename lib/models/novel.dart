@@ -21,6 +21,7 @@ class Novel {
   final String slug;
   final String? description;
   final bool isPublic;
+  final bool isOwner;
 
   const Novel({
     required this.id,
@@ -31,6 +32,7 @@ class Novel {
     required this.slug,
     required this.description,
     required this.isPublic,
+    this.isOwner = false,
   });
 
   factory Novel.fromJson(Map<String, dynamic> json) => Novel(
@@ -42,17 +44,20 @@ class Novel {
         slug: json['slug'] as String? ?? '',
         description: json['description'] as String?,
         isPublic: json['isPublic'] as bool? ?? false,
+        isOwner: json['isOwner'] as bool? ?? false,
       );
 }
 
 /// Response from `POST /upload-epub`.
 class NovelUploadResponse {
+  final String? slug;
   final String title;
   final String? author;
   final int chapterCount;
   final String message;
 
   const NovelUploadResponse({
+    this.slug,
     required this.title,
     required this.author,
     required this.chapterCount,
@@ -61,6 +66,7 @@ class NovelUploadResponse {
 
   factory NovelUploadResponse.fromJson(Map<String, dynamic> json) =>
       NovelUploadResponse(
+        slug: json['slug'] as String? ?? json['id'] as String?,
         title: json['title'] as String? ?? '',
         author: json['author'] as String?,
         chapterCount: (json['chapterCount'] as num?)?.toInt() ?? 0,

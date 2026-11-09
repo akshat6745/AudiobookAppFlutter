@@ -33,28 +33,35 @@ class AuthNotifier extends StateNotifier<AuthState> {
     UserApi? api,
     GoogleAuthService? google,
     SessionStore? sessions,
-  })  : _api = api ?? userApi,
-        _google = google ?? googleAuthService,
-        _sessions = sessions ?? sessionStore,
-        super(AuthState(user: initialUser, isLoading: false));
+  }) : _api = api ?? userApi,
+       _google = google ?? googleAuthService,
+       _sessions = sessions ?? sessionStore,
+       super(AuthState(user: initialUser, isLoading: false));
 
   final UserApi _api;
   final GoogleAuthService _google;
   final SessionStore _sessions;
 
-  Future<bool> login(String username, String password) async {
+  /// Returns null on success, or a message safe to show. A rejected password
+  /// and a server the phone cannot reach are different failures.
+  Future<String?> login(String username, String password) async {
     state = state.copyWith(isLoading: true);
     try {
       final session = await _api.login(username, password);
       if (session != null) {
         await _startSession(session);
-        return true;
+        return null;
       }
       state = state.copyWith(isLoading: false);
-      return false;
+      return 'Invalid username or password';
+    } on DioException catch (e) {
+      state = state.copyWith(isLoading: false);
+      final code = e.response?.statusCode;
+      if (code == 400 || code == 401) return 'Invalid username or password';
+      return "Couldn't reach the server. Check your connection.";
     } catch (_) {
       state = state.copyWith(isLoading: false);
-      return false;
+      return "Couldn't reach the server. Check your connection.";
     }
   }
 
@@ -83,6 +90,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } on GoogleAuthException catch (e) {
       state = state.copyWith(isLoading: false);
       return e.message;
+    } on DioException catch (e) {
+      state = state.copyWith(isLoading: false);
+      final code = e.response?.statusCode;
+      if (code == 401 || code == 403) return "Couldn't sign in with Google";
+      final data = e.response?.data;
+      final detail = data is Map ? data['detail'] : null;
+      if (code == 503 && detail is String && detail.isNotEmpty) return detail;
+      return "Couldn't reach the server. Check your connection.";
     } catch (_) {
       state = state.copyWith(isLoading: false);
       return "Couldn't reach the server. Check your connection.";
@@ -152,6 +167,30 @@ class AuthNotifier extends StateNotifier<AuthState> {
     await _google.signOut();
     await _sessions.clear();
     state = const AuthState();
+  }
+
+  /// Permanently deletes the signed-in account on the server and clears the
+  /// local session. Returns null on success, or an error message to show.
+  Future<String?> deleteAccount() async {
+    state = state.copyWith(isLoading: true);
+    try {
+      final ok = await _api.deleteAccount();
+      if (!ok) {
+        state = state.copyWith(isLoading: false);
+        return "Couldn't delete account";
+      }
+      await logout();
+      return null;
+    } on DioException catch (e) {
+      state = state.copyWith(isLoading: false);
+      final data = e.response?.data;
+      final detail = data is Map ? data['detail'] : null;
+      if (detail is String && detail.isNotEmpty) return detail;
+      return "Couldn't reach the server. Check your connection.";
+    } catch (_) {
+      state = state.copyWith(isLoading: false);
+      return "Couldn't delete account";
+    }
   }
 }
 
