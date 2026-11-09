@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="9 9 90 90">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="0.45" stop-color="#0284C7"/>
+      <stop offset="1" stop-color="#0C4A6E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.38" r="0.5">
+      <stop offset="0" stop-color="#BAE6FD" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#BAE6FD" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="108" height="108" fill="url(#bg)"/>
+  <rect width="108" height="108" fill="url(#glow)"/>
+
+  <defs>
+    <linearGradient id="wave" gradientUnits="userSpaceOnUse" x1="0" y1="56" x2="0" y2="35">
+      <stop offset="0" stop-color="#FB923C"/>
+      <stop offset="1" stop-color="#FDE047"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E0F2FE"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.6"/>
+    </filter>
+  </defs>
+  <g transform="translate(0,-4)">
+  <ellipse cx="54" cy="83" rx="23" ry="3" fill="#082F49" opacity="0.45" filter="url(#shadow)"/>
+  <path d="M54,65 C47,60.5 38,59.5 30,61 L30,78.5 C38,77.3 47,78.3 54,82.5 C61,78.3 70,77.3 78,78.5 L78,61 C70,59.5 61,60.5 54,65 Z" fill="#F97316"/>
+  <path d="M54,63 C47,58.5 39,57.5 32,59 L32,76 C39,74.8 47,75.8 54,80 Z" fill="url(#page)"/>
+  <path d="M54,63 C61,58.5 69,57.5 76,59 L76,76 C69,74.8 61,75.8 54,80 Z" fill="url(#page)"/>
+  <path d="M54,63 L54,80" stroke="#7DD3FC" stroke-width="0.8"/>
+  <g fill="none" stroke="#7DD3FC" stroke-width="1.1" stroke-linecap="round">
+    <path d="M36,64 C41,63 45,63.4 50,65"/>
+    <path d="M36,68 C41,67 45,67.4 50,69"/>
+    <path d="M36,72 C40,71.2 43,71.4 46,72.4"/>
+    <path d="M58,65 C63,63.4 67,63 72,64"/>
+    <path d="M58,69 C63,67.4 67,67 72,68"/>
+    <path d="M62,72.4 C65,71.4 68,71.2 72,72"/>
+  </g>
+  <rect x="36.7" y="49" width="3.4" height="7" rx="1.7" fill="url(#wave)"/><rect x="41.9" y="42" width="3.4" height="14" rx="1.7" fill="url(#wave)"/><rect x="47.1" y="46" width="3.4" height="10" rx="1.7" fill="url(#wave)"/><rect x="52.3" y="35" width="3.4" height="21" rx="1.7" fill="url(#wave)"/><rect x="57.5" y="43" width="3.4" height="13" rx="1.7" fill="url(#wave)"/><rect x="62.7" y="39" width="3.4" height="17" rx="1.7" fill="url(#wave)"/><rect x="67.9" y="48" width="3.4" height="8" rx="1.7" fill="url(#wave)"/>
+  </g>
+</svg>

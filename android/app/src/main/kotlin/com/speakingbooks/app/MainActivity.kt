@@ -1,4 +1,4 @@
-package com.audiobook.audiobook_app
+package com.speakingbooks.app
 
 import com.ryanheise.audioservice.AudioServiceActivity
 

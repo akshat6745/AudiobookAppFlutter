@@ -61,7 +61,7 @@ Future<void> main() async {
   final handler = await AudioService.init<AudiobookHandler>(
     builder: () => AudiobookHandler(cache: cache),
     config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.audiobook.audiobook_app.audio',
+      androidNotificationChannelId: 'com.speakingbooks.app.audio',
       androidNotificationChannelName: 'Audiobook Playback',
       androidStopForegroundOnPause: false,
     ),
@@ -131,6 +131,13 @@ class _AudiobookAppState extends ConsumerState<AudiobookApp>
         _reconcileVoicesForEngine(engine);
       }
     });
+    ref.listenManual(useSavedAudioProvider, (prev, next) async {
+      await ref.read(audioCacheProvider).setUseSavedAudio(next);
+      if (prev == null || prev == next) return;
+      final index = ref.read(audioStateProvider).currentIndex;
+      if (index == null) return;
+      await ref.read(playbackCoordinatorProvider).playParagraph(index);
+    }, fireImmediately: true);
     _restoreVoicePrefs();
   }
 

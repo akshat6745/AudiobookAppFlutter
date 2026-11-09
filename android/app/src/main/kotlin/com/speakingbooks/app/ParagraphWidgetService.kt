@@ -1,4 +1,4 @@
-package com.audiobook.audiobook_app
+package com.speakingbooks.app
 
 import android.content.Context
 import android.content.Intent
