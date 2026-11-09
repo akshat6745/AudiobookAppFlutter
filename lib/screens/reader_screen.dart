@@ -12,6 +12,7 @@ import '../providers/audio_providers.dart';
 import '../providers/download_providers.dart';
 import '../providers/playback_coordinator.dart';
 import '../providers/progress_providers.dart';
+import '../providers/tts_engine_provider.dart';
 import '../router.dart';
 import '../services/chapter_api.dart';
 import '../services/offline_content_service.dart';
@@ -117,6 +118,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         raw = remote.content;
       }
       if (!mounted) return;
+      ref.read(savedAudioTargetProvider.notifier).set(
+            slug: widget.novel.slug,
+            chapterNumber: widget.chapter.chapterNumber,
+            lines: raw,
+          );
       setState(() {
         _displayContent = [_titleLine, ...raw];
         _contentLoading = false;

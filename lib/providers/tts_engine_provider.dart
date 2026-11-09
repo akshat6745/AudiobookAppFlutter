@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/saved_chapter_audio.dart';
 import '../services/storage.dart';
 import '../services/tts/remote_tts_engine.dart';
 import '../services/tts/sherpa_onnx_tts_engine.dart';
@@ -25,7 +26,8 @@ final remoteTtsEngineProvider = Provider<TtsEngine>((ref) => RemoteTtsEngine());
 /// User-facing choice of which engine to use, exposed as a Profile screen
 /// toggle. [auto] preserves the original behavior (prefer on-device once
 /// installed, otherwise remote); [offline]/[online] force one side.
-enum TtsMode { auto, offline, online }
+/// [saved] plays the pre-rendered R2 chapter when that chapter is complete.
+enum TtsMode { auto, offline, online, saved }
 
 /// Persists [TtsMode] to [Storage] and restores it on the next launch.
 class TtsModeNotifier extends StateNotifier<TtsMode> {
@@ -38,6 +40,11 @@ class TtsModeNotifier extends StateNotifier<TtsMode> {
   /// to — [state] already starts at a sensible default ([TtsMode.auto]).
   late final Future<void> ready;
 
+  /// Mode to keep generating with when [TtsMode.saved] is selected but the
+  /// open chapter has no complete R2 audio, and the engine to leave in place
+  /// while saved audio is playing.
+  TtsMode fallback = TtsMode.auto;
+
   Future<void> _restore() async {
     final raw = await Storage.getString(StorageKeys.ttsMode);
     state = TtsMode.values.firstWhere(
@@ -47,10 +54,51 @@ class TtsModeNotifier extends StateNotifier<TtsMode> {
   }
 
   Future<void> select(TtsMode mode) async {
+    if (mode == TtsMode.saved && state != TtsMode.saved) {
+      fallback = state;
+    }
     state = mode;
     await Storage.setString(StorageKeys.ttsMode, mode.name);
   }
 }
+
+/// Chapter the reader or player is showing, used to decide if R2 audio exists.
+class SavedAudioTargetNotifier extends StateNotifier<SavedAudioTarget?> {
+  SavedAudioTargetNotifier() : super(null);
+
+  void set({
+    required String slug,
+    required int chapterNumber,
+    required List<String> lines,
+  }) {
+    final next = SavedAudioTarget(
+      slug: slug,
+      chapterNumber: chapterNumber,
+      lines: lines,
+    );
+    if (state == next) return;
+    state = next;
+  }
+}
+
+final savedAudioTargetProvider =
+    StateNotifierProvider<SavedAudioTargetNotifier, SavedAudioTarget?>(
+  (_) => SavedAudioTargetNotifier(),
+);
+
+/// True only when the open chapter's R2 manifest covers every paragraph.
+final savedChapterReadyProvider = FutureProvider<bool>((ref) async {
+  final target = ref.watch(savedAudioTargetProvider);
+  if (target == null) return false;
+  return SavedChapterAudio().isChapterComplete(target);
+});
+
+/// Playback should stream stored Opus instead of synthesizing.
+final useSavedAudioProvider = Provider<bool>((ref) {
+  if (ref.watch(ttsModeProvider) != TtsMode.saved) return false;
+  final ready = ref.watch(savedChapterReadyProvider);
+  return ready.valueOrNull ?? false;
+});
 
 final ttsModeProvider =
     StateNotifierProvider<TtsModeNotifier, TtsMode>((_) => TtsModeNotifier());
@@ -68,7 +116,10 @@ final ttsModeProvider =
 /// Playback/caching code depends only on [TtsEngine], so switching is
 /// transparent to the rest of the app either way.
 final activeTtsEngineProvider = FutureProvider<TtsEngine>((ref) async {
-  final mode = ref.watch(ttsModeProvider);
+  final selected = ref.watch(ttsModeProvider);
+  final mode = selected == TtsMode.saved
+      ? ref.read(ttsModeProvider.notifier).fallback
+      : selected;
   if (mode == TtsMode.online) {
     return ref.watch(remoteTtsEngineProvider);
   }

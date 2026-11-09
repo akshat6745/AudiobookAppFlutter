@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/audio_providers.dart';
+import '../providers/playback_coordinator.dart';
 import '../providers/tts_engine_provider.dart';
 
 /// Profile screen control letting the user force online or offline voice
@@ -14,42 +16,56 @@ class TtsModeSelector extends ConsumerWidget {
     final mode = ref.watch(ttsModeProvider);
     final modelInstalled =
         ref.watch(ttsModelPathsProvider).valueOrNull != null;
+    final savedReady =
+        ref.watch(savedChapterReadyProvider).valueOrNull ?? false;
+    final shown = mode == TtsMode.saved && !savedReady ? TtsMode.auto : mode;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SegmentedButton<TtsMode>(
-          segments: const [
-            ButtonSegment(
+          showSelectedIcon: !savedReady,
+          segments: [
+            const ButtonSegment(
               value: TtsMode.auto,
               label: Text('Auto'),
               icon: Icon(Icons.auto_awesome),
             ),
-            ButtonSegment(
+            const ButtonSegment(
               value: TtsMode.offline,
               label: Text('Offline'),
               icon: Icon(Icons.download_done),
             ),
-            ButtonSegment(
+            const ButtonSegment(
               value: TtsMode.online,
               label: Text('Online'),
               icon: Icon(Icons.cloud_outlined),
             ),
+            if (savedReady)
+              const ButtonSegment(
+                value: TtsMode.saved,
+                label: Text('R2'),
+                icon: Icon(Icons.library_music_outlined),
+              ),
           ],
-          selected: {mode},
-          onSelectionChanged: (selection) =>
-              ref.read(ttsModeProvider.notifier).select(selection.first),
+          selected: {shown},
+          onSelectionChanged: (selection) async {
+            await ref.read(ttsModeProvider.notifier).select(selection.first);
+            final index = ref.read(audioStateProvider).currentIndex;
+            if (index == null) return;
+            await ref.read(playbackCoordinatorProvider).playParagraph(index);
+          },
         ),
         const SizedBox(height: 6),
         Text(
-          _description(mode, modelInstalled),
+          _description(shown, modelInstalled, savedReady && mode == TtsMode.saved),
           style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
       ],
     );
   }
 
-  String _description(TtsMode mode, bool modelInstalled) {
+  String _description(TtsMode mode, bool modelInstalled, bool playingSaved) {
     switch (mode) {
       case TtsMode.online:
         return 'Always uses the deployed backend, even if the offline '
@@ -62,6 +78,10 @@ class TtsModeSelector extends ConsumerWidget {
       case TtsMode.auto:
         return 'Uses the on-device model when installed, otherwise the '
             'backend.';
+      case TtsMode.saved:
+        return playingSaved
+            ? 'Plays the recorded R2 audio for this chapter.'
+            : 'Recorded audio is not ready for this chapter.';
     }
   }
 }

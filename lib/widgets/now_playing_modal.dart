@@ -222,6 +222,8 @@ class _EngineStatusBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(ttsModeProvider);
+    final savedReady =
+        ref.watch(savedChapterReadyProvider).valueOrNull ?? false;
     final engineAsync = ref.watch(activeTtsEngineProvider);
 
     return engineAsync.when(
@@ -249,6 +251,12 @@ class _EngineStatusBanner extends ConsumerWidget {
           case TtsMode.auto:
             icon = Icons.auto_awesome;
             text = "Auto — using the on-device model since it's installed.";
+          case TtsMode.saved when savedReady:
+            icon = Icons.library_music_outlined;
+            text = 'R2 — playing the recorded chapter audio.';
+          case TtsMode.saved:
+            icon = Icons.auto_awesome;
+            text = "This chapter isn't fully recorded — using Auto.";
         }
         return Row(
           children: [

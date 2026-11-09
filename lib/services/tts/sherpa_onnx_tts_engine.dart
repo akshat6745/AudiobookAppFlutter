@@ -244,8 +244,9 @@ void _workerMain(SendPort toMain) {
           final chunks = <Float32List>[];
           var sampleRate = 24000;
           for (final seg in segments) {
+            final segText = _ensureTerminalPunctuation(seg.text);
             final audio = engine.generate(
-              text: seg.text,
+              text: segText,
               sid: seg.isDialogue
                   ? message['dialogueSid'] as int
                   : message['narratorSid'] as int,
@@ -255,7 +256,10 @@ void _workerMain(SendPort toMain) {
             chunks.add(audio.samples);
           }
           sw.stop();
-          final samples = applyFade(_concat(chunks), sampleRate);
+          final faded = applyFade(_concat(chunks), sampleRate);
+          // Append a 250ms trailing silence pad so short headings ("Underlord",
+          // "Chapter 16") decay cleanly before the next paragraph starts.
+          final samples = _concat([faded, Float32List((sampleRate * 0.25).round())]);
           final wav = encodeWavPcm16(samples, sampleRate);
           final audioMs =
               sampleRate > 0 ? (samples.length * 1000 / sampleRate).round() : 0;
@@ -285,6 +289,14 @@ void _workerMain(SendPort toMain) {
 }
 
 // ─────────────────────── helpers (shared by worker) ───────────────────────
+
+final _terminalPunct = RegExp(r'[.!?…:;—][”"\x27)\]]*$');
+
+String _ensureTerminalPunctuation(String raw) {
+  final cleaned = raw.replaceAll('[', ' ').replaceAll(']', ' ').trim();
+  if (cleaned.isEmpty) return raw;
+  return _terminalPunct.hasMatch(cleaned) ? cleaned : '$cleaned.';
+}
 
 Float32List _concat(List<Float32List> parts) {
   final total = parts.fold<int>(0, (n, p) => n + p.length);

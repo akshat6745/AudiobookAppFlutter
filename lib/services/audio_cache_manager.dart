@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/paragraph_audio.dart';
 import 'offline_content_service.dart';
+import 'saved_chapter_audio.dart';
 import 'tts/remote_tts_engine.dart';
 import 'tts/tts_engine.dart';
 
@@ -66,6 +67,8 @@ class AudioCacheManager {
   _OfflineBundle? _offlineCache;
 
   TtsEngine _engine;
+  bool _useSavedAudio = false;
+  final SavedChapterAudio _savedAudio;
 
   // Preload pump: keep _config.preloadCharacterThreshold characters of upcoming
   // audio (paragraphs after _preloadAnchor, not counting it) ready or generating.
@@ -84,9 +87,11 @@ class AudioCacheManager {
     AudioCacheConfig config = const AudioCacheConfig(),
     TtsEngine? engine,
     Directory? cacheDirOverride,
+    SavedChapterAudio? savedAudio,
   })  : _narratorVoice = narratorVoice,
         _dialogueVoice = dialogueVoice,
         _engine = engine ?? RemoteTtsEngine(),
+        _savedAudio = savedAudio ?? SavedChapterAudio(),
         _config = config,
         _cacheDirOverride = cacheDirOverride;
 
@@ -114,6 +119,15 @@ class AudioCacheManager {
     if (_narratorVoice == narrator && _dialogueVoice == dialogue) return;
     _narratorVoice = narrator;
     _dialogueVoice = dialogue;
+    await clearCache();
+  }
+
+  /// Play stored R2 Opus for this chapter instead of synthesizing.
+  /// Clears cached clips when the source changes so a paragraph is not
+  /// replayed from the other engine.
+  Future<void> setUseSavedAudio(bool enabled) async {
+    if (_useSavedAudio == enabled) return;
+    _useSavedAudio = enabled;
     await clearCache();
   }
 
@@ -306,6 +320,37 @@ class AudioCacheManager {
   ) async {
     final novel = key.$1;
     final chapter = key.$2;
+
+    if (_useSavedAudio) {
+      final bytes = await _savedAudio.downloadParagraph(
+        novel: novel,
+        chapter: chapter,
+        playbackIndex: index,
+      );
+      if (gen != _generation) return;
+      if (bytes == null) {
+        throw StateError(
+          'AudioCacheManager: recorded audio missing for paragraph $index',
+        );
+      }
+      if (kIsWeb) {
+        entry.audioUri = 'data:audio/ogg;base64,${base64Encode(bytes)}';
+      } else {
+        final cachePath = await _ttsCachePath(index, 'ogg');
+        await File(cachePath).writeAsBytes(bytes);
+        if (gen != _generation) {
+          try {
+            await File(cachePath).delete();
+          } catch (_) {}
+          return;
+        }
+        entry.audioUri = cachePath;
+      }
+      entry.audioReceived = true;
+      entry.isLoading = false;
+      _cache[key] = entry;
+      return;
+    }
 
     // 1. Offline-first lookup (file system only available on mobile/desktop).
     if (!kIsWeb) {

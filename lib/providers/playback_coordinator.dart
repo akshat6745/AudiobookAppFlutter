@@ -13,6 +13,7 @@ import '../widget/audiobook_home_widget.dart';
 import 'audio_providers.dart';
 import 'last_position_provider.dart';
 import 'progress_providers.dart';
+import 'tts_engine_provider.dart';
 
 /// Coordinates high-level playback operations: loading a chapter, playing
 /// a paragraph, auto-advancing, and loading the next chapter on completion.
@@ -119,6 +120,11 @@ class PlaybackCoordinator {
       // Client-side convention: content[0] is the chapter title.
       final titleLine = 'Chapter ${chapter.chapterNumber}: ${chapter.chapterTitle}';
       prepared = [titleLine, ...content];
+      _ref.read(savedAudioTargetProvider.notifier).set(
+            slug: novel.slug,
+            chapterNumber: chapter.chapterNumber,
+            lines: content,
+          );
 
       _ref.read(audioStateProvider.notifier).loadChapter(
             novel: novel,
