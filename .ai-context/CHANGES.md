@@ -4,6 +4,20 @@ Append dated entries when making significant changes. Keep entries terse.
 
 ---
 
+## 2026-11-13 — Fix last-second pause, notification auto-resume, and earphone replay
+
+- `audio_handler.dart`:
+  - Added `pauseForTransition()` and moved internal transition pause inside `playParagraph()` so auto-advance and chapter switches do not clear `_wantsPlayback = false`.
+  - Tracked `_loadedIndex` alongside `_currentIndex` so `play()` reloads `_currentIndex` if a paragraph load failed or was interrupted before `setAudioSource`.
+  - Added `isNearParagraphEnd()` (`<= 1s` remaining after passing the clip midpoint) and updated `decideInterruptionResume()` + `play()` to advance directly to the next paragraph when resuming from `ProcessingState.completed` or the final `<= 1s` tail.
+  - Guarded `_onPlayerStateChanged` auto-advance on `_wantsPlayback && !_transientInterruption` so draining into `completed` during a manual pause or notification chime does not burn `_lastCompletedIndex`.
+  - Computed `_isEffectivelyPlaying` (`_player.playing && _player.processingState != ProcessingState.completed`) for `_emitPlaybackState()` and `_shouldPauseOnToggle` for `toggle()` / `click()` so hardware earphone buttons never get stuck calling `pause()` at `ProcessingState.completed`.
+- `playback_coordinator.dart`:
+  - Switched `loadChapter` to `_handler.pauseForTransition()`, removed redundant `_handler.pause()` from `playParagraph`, and synced `audioStateProvider.isPlaying` from `_onHandlerPlayback`.
+- `test/audio_interruption_test.dart`: added unit tests for `isNearParagraphEnd` and `decideInterruptionResume` near paragraph end.
+
+---
+
 ## 2026-08-07 — Playback overhaul: session-scoped cache, voice UX, perf, error handling
 
 **Bug fix — chapter-switch audio leak (root cause: unscoped cache + no session identity):**

@@ -11,6 +11,26 @@ import 'audio_cache_manager.dart';
 /// ends.
 enum InterruptionResumeDecision { resume, advance, ignore }
 
+/// Threshold under which a paused paragraph is considered effectively finished
+/// (since paragraphs include 250–550ms of trailing silence and hardware/A2DP
+/// buffers look ahead by ~300–500ms).
+const Duration kNearParagraphEndThreshold = Duration(seconds: 1);
+
+/// True when playback has progressed past the midpoint of the clip and has at
+/// most [kNearParagraphEndThreshold] remaining. A clip sitting at
+/// [Duration.zero] (e.g. newly loaded during an interruption) is never near
+/// its end, even if the clip itself is under 1 second long.
+@visibleForTesting
+bool isNearParagraphEnd({
+  required Duration position,
+  required Duration? duration,
+}) {
+  if (duration == null || duration <= Duration.zero) return false;
+  if (position <= Duration.zero) return false;
+  if (position * 2 < duration) return false;
+  return (duration - position) <= kNearParagraphEndThreshold;
+}
+
 /// Decides how to resume when a transient interruption ends.
 ///
 /// Keyed on *intent* ([wantsPlayback]) rather than the player's momentary
@@ -23,20 +43,24 @@ enum InterruptionResumeDecision { resume, advance, ignore }
 /// - A paragraph load is still in flight → do nothing here; that load starts
 ///   playback itself once it completes, now that the interruption is over.
 ///   (Advancing here would skip the paragraph being loaded.)
-/// - The source already finished (e.g. auto-advance was waiting on the next
-///   chapter's content) → take the normal auto-advance path, which is
-///   de-duplicated per paragraph.
+/// - The source already finished or is within [kNearParagraphEndThreshold] of
+///   the end → take the normal auto-advance path so playback does not get
+///   stuck on a completed/silent tail.
 /// - Otherwise → resume the loaded source.
 @visibleForTesting
 InterruptionResumeDecision decideInterruptionResume({
   required bool wantsPlayback,
   required bool loadInFlight,
   required ProcessingState processingState,
+  Duration position = Duration.zero,
+  Duration? duration,
 }) {
   if (!wantsPlayback || loadInFlight) return InterruptionResumeDecision.ignore;
-  return processingState == ProcessingState.completed
-      ? InterruptionResumeDecision.advance
-      : InterruptionResumeDecision.resume;
+  if (processingState == ProcessingState.completed ||
+      isNearParagraphEnd(position: position, duration: duration)) {
+    return InterruptionResumeDecision.advance;
+  }
+  return InterruptionResumeDecision.resume;
 }
 
 /// Callback contract used by the UI / providers layer.
@@ -76,6 +100,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
 
   List<String> _paragraphs = const [];
   int? _currentIndex;
+  int? _loadedIndex;
 
   String _novelName = '';
   String _chapterTitle = '';
@@ -157,11 +182,29 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     _generation++;
     _paragraphs = paragraphs;
     _currentIndex = null;
+    _loadedIndex = null;
     _lastCompletedIndex = null;
   }
 
   int? get currentIndex => _currentIndex;
   double get playbackSpeed => _playbackSpeed;
+  bool get wantsPlayback => _wantsPlayback;
+
+  /// Whether the player is actively producing sound (excludes the post-EOF
+  /// state where just_audio keeps `playing == true` at `completed`).
+  bool get _isEffectivelyPlaying =>
+      _player.playing && _player.processingState != ProcessingState.completed;
+
+  /// True when audio is actively playing or a paragraph load is in flight
+  /// that intends to play as soon as it finishes.
+  bool get _shouldPauseOnToggle =>
+      _isEffectivelyPlaying ||
+      (_loadsInFlight > 0 && _wantsPlayback && !_transientInterruption);
+
+  /// Silences the player before loading a new chapter/paragraph without
+  /// clearing [_wantsPlayback], so auto-advance and in-flight interruptions
+  /// never mistake an internal transition for a manual user pause.
+  Future<void> pauseForTransition() => _player.pause();
 
   /// Play a specific paragraph. Resolves audio via the cache manager then
   /// swaps the just_audio source.
@@ -184,6 +227,10 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
       _lastCompletedIndex = null;
       _wantsPlayback = true;
       _emitPlaybackState(isLoading: true);
+
+      // Silence whatever is currently playing without clearing _wantsPlayback.
+      await _player.pause();
+      if (!_isCurrent(gen, paragraphIndex)) return false;
 
       final audio = await cache.getAudio(
         paragraphIndex: paragraphIndex,
@@ -220,9 +267,11 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
       final uri = (audioUri.startsWith('data:') || audioUri.startsWith('http'))
           ? Uri.parse(audioUri)
           : Uri.file(audioUri);
+      _loadedIndex = null;
       await _player.setAudioSource(AudioSource.uri(uri));
 
       if (!_isCurrent(gen, paragraphIndex)) return false;
+      _loadedIndex = paragraphIndex;
 
       this.mediaItem.add(mediaItem);
 
@@ -264,16 +313,72 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   /// An explicit play request (UI, notification, headset) — the user's
   /// choice overrides any interruption in progress.
   @override
-  Future<void> play() {
+  Future<void> play() async {
     _wantsPlayback = true;
     _transientInterruption = false;
-    return _player.play();
+
+    // 1. If a paragraph load is already in flight (e.g. paused while the next
+    //    paragraph was being fetched/synthesized), flipping _wantsPlayback
+    //    back to true lets playParagraph() start playback once it finishes.
+    if (_loadsInFlight > 0) {
+      _emitPlaybackState(isLoading: true);
+      return;
+    }
+
+    // 2. If _currentIndex was set but its audio hasn't been loaded into
+    //    _player yet (e.g. a load failed or was interrupted before
+    //    setAudioSource), load and play _currentIndex now.
+    if (_currentIndex != null &&
+        _currentIndex! < _paragraphs.length &&
+        (_loadedIndex != _currentIndex ||
+            _player.processingState == ProcessingState.idle)) {
+      await playParagraph(
+        paragraphIndex: _currentIndex!,
+        paragraphText: _paragraphs[_currentIndex!],
+      );
+      return;
+    }
+
+    // 3. If the loaded paragraph already reached completed, or was paused in
+    //    its final <=1s (which is mostly trailing silence / A2DP buffer tail),
+    //    calling _player.play() would either no-op at STATE_ENDED or play a
+    //    brief blip of silence. Advance directly to the next paragraph.
+    if (_player.processingState == ProcessingState.completed ||
+        isNearParagraphEnd(
+          position: _player.position,
+          duration: _player.duration,
+        )) {
+      _lastCompletedIndex = null;
+      await _triggerAutoAdvance();
+      return;
+    }
+
+    _lastCompletedIndex = null;
+    // Not awaited: just_audio's play() only completes once playback pauses
+    // or stops.
+    unawaited(_player.play().catchError((Object _) {}));
   }
 
   @override
-  Future<void> pause() {
+  Future<void> pause() async {
     _wantsPlayback = false;
-    return _player.pause();
+    await _player.pause();
+    _emitPlaybackState();
+  }
+
+  @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    switch (button) {
+      case MediaButton.media:
+        await toggle();
+        break;
+      case MediaButton.next:
+        await skipToNext();
+        break;
+      case MediaButton.previous:
+        await skipToPrevious();
+        break;
+    }
   }
 
   @override
@@ -288,6 +393,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // or a stale play against an index/session that no longer exists.
     _generation++;
     _currentIndex = null;
+    _loadedIndex = null;
     _lastCompletedIndex = null;
     _paragraphs = const [];
     await _player.stop();
@@ -312,9 +418,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // remote command). The coordinator uses this to reset the UI-facing
     // audio state. Guarded by `wasActive` and `_suppressRemoteStop` so
     // coordinator-initiated stops don't loop back into themselves.
-    if (wasActive &&
-        !_suppressRemoteStop &&
-        _callbacks.onRemoteStop != null) {
+    if (wasActive && !_suppressRemoteStop && _callbacks.onRemoteStop != null) {
       await _callbacks.onRemoteStop!();
     }
   }
@@ -359,7 +463,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> toggle() async {
-    if (_player.playing) {
+    if (_shouldPauseOnToggle) {
       await pause();
     } else {
       await play();
@@ -413,12 +517,15 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           // Android always follows up with an end event.
           _transientInterruption = true;
           _player.pause();
+          _emitPlaybackState();
           break;
         case AudioInterruptionType.unknown:
           // iOS: any interruption beginning (its end may still ask us to
           // resume). Android: another app took focus permanently — no end
           // event follows, so the next user play request resumes.
+          _transientInterruption = true;
           _player.pause();
+          _emitPlaybackState();
           break;
       }
     } else {
@@ -437,21 +544,26 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
             wantsPlayback: _wantsPlayback,
             loadInFlight: _loadsInFlight > 0,
             processingState: _player.processingState,
+            position: _player.position,
+            duration: _player.duration,
           );
           switch (decision) {
             case InterruptionResumeDecision.resume:
-              _player.play();
+              play();
               break;
             case InterruptionResumeDecision.advance:
+              _lastCompletedIndex = null;
               _triggerAutoAdvance();
               break;
             case InterruptionResumeDecision.ignore:
+              _emitPlaybackState();
               break;
           }
           break;
         case AudioInterruptionType.unknown:
           // iOS ended without `shouldResume` — stay paused.
           _transientInterruption = false;
+          _emitPlaybackState();
           break;
       }
     }
@@ -463,14 +575,20 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
     // Auto-advance trigger. just_audio fires processingState == completed
     // reliably on both Android (ExoPlayer) and iOS (AVAudioPlayer) — no
     // polling workaround needed.
-    if (state.processingState == ProcessingState.completed) {
+    // Only auto-advance when playback is still wanted and not paused for an
+    // interruption; if the last <1s drains into `completed` while paused or
+    // interrupted, leave `_lastCompletedIndex` unconsumed so resuming
+    // advances cleanly to the next paragraph.
+    if (state.processingState == ProcessingState.completed &&
+        _wantsPlayback &&
+        !_transientInterruption) {
       await _triggerAutoAdvance();
     }
   }
 
   /// Advances to the next paragraph past [_currentIndex]. Shared by the
-  /// natural-completion listener and the interruption-end handler (which
-  /// needs the same path when a paragraph finished during/around an
+  /// natural-completion listener, [play], and the interruption-end handler
+  /// (which needs the same path when a paragraph finished during/around an
   /// interruption). Guarded by [_lastCompletedIndex] so it can never fire
   /// twice for the same paragraph.
   Future<void> _triggerAutoAdvance() async {
@@ -486,7 +604,7 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
   }
 
   void _emitPlaybackState({bool? isLoading}) {
-    final playing = _player.playing;
+    final playing = _isEffectivelyPlaying;
     final processingState = _player.processingState;
     final bufferedPosition = _player.bufferedPosition;
     final position = _player.position;
@@ -503,6 +621,9 @@ class AudiobookHandler extends BaseAudioHandler with SeekHandler {
           MediaAction.seek,
           MediaAction.skipToNext,
           MediaAction.skipToPrevious,
+          MediaAction.play,
+          MediaAction.pause,
+          MediaAction.playPause,
         },
         androidCompactActionIndices: const [0, 1, 2],
         processingState: _mapProcessingState(processingState, isLoading),

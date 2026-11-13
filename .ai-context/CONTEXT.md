@@ -73,9 +73,8 @@ injects both via `ProviderScope(overrides: [audioCacheProvider.overrideWithValue
   `gen == _generation && paragraphIndex == _currentIndex` after every `await`
   before calling `setAudioSource`/`play` — a stale `playParagraph` call (e.g. from
   auto-advance racing a user tap) never reaches the player.
-- `PlaybackCoordinator.loadChapter` calls `_handler.pause()` and resets index state
-  **before** any async content resolution, so the reset is atomic from the caller's
-  perspective.
+- `PlaybackCoordinator.loadChapter` calls `_handler.pauseForTransition()` (pauses `_player` without clearing `_wantsPlayback`) and resets index state **before** any async content resolution, so the reset is atomic from the caller's perspective.
+- `AudiobookHandler.play()` and `decideInterruptionResume()` check `isNearParagraphEnd()` (`<= 1s` left past the clip midpoint) and `ProcessingState.completed` to advance directly to the next paragraph when resuming from a last-second pause or notification chime, and `_emitPlaybackState()` reports `_isEffectivelyPlaying` (`_player.playing && _player.processingState != ProcessingState.completed`) so hardware earphone buttons never get stuck calling `pause()` at EOF.
 - Do not remove the composite key or the generation checks without re-adding
   equivalent protection — this is what fixes the "chapter 5 audio plays under
   chapter 6" bug. Regression tests: `test/audio_cache_preload_test.dart` →

@@ -47,6 +47,9 @@ class PlaybackCoordinator {
   }
 
   void _onHandlerPlayback(PlaybackState ps) {
+    if (_ref.read(audioStateProvider).isPlaying != ps.playing) {
+      _ref.read(audioStateProvider.notifier).setIsPlaying(ps.playing);
+    }
     _pushWidgetState();
     // Throttled progress refresh on play transitions — the user may have
     // listened on another device since we last fetched, so we want fresh
@@ -101,7 +104,8 @@ class PlaybackCoordinator {
     bool autoPlay = false,
   }) async {
     final current = _ref.read(audioStateProvider);
-    final alreadyLoaded = current.novel?.slug == novel.slug &&
+    final alreadyLoaded =
+        current.novel?.slug == novel.slug &&
         current.chapter?.chapterNumber == chapter.chapterNumber &&
         current.content.isNotEmpty;
 
@@ -111,26 +115,28 @@ class PlaybackCoordinator {
     } else {
       // Silence whatever is currently playing immediately — before resolving
       // content or touching the cache/handler — so a chapter switch can never
-      // leave old audio audible while the new chapter loads. `pause` (not
-      // `stop`) keeps the MediaSession alive; `setParagraphs` below is what
-      // actually starts the new session (bumps the handler's generation).
-      await _handler.pause();
+      // leave old audio audible while the new chapter loads. `pauseForTransition`
+      // (not `pause` or `stop`) keeps the MediaSession and playback intent
+      // alive; `setParagraphs` below is what actually starts the new session
+      // (bumps the handler's generation).
+      await _handler.pauseForTransition();
 
       final content = initialContent ?? await _resolveContent(novel, chapter);
       // Client-side convention: content[0] is the chapter title.
-      final titleLine = 'Chapter ${chapter.chapterNumber}: ${chapter.chapterTitle}';
+      final titleLine =
+          'Chapter ${chapter.chapterNumber}: ${chapter.chapterTitle}';
       prepared = [titleLine, ...content];
-      _ref.read(savedAudioTargetProvider.notifier).set(
+      _ref
+          .read(savedAudioTargetProvider.notifier)
+          .set(
             slug: novel.slug,
             chapterNumber: chapter.chapterNumber,
             lines: content,
           );
 
-      _ref.read(audioStateProvider.notifier).loadChapter(
-            novel: novel,
-            chapter: chapter,
-            content: prepared,
-          );
+      _ref
+          .read(audioStateProvider.notifier)
+          .loadChapter(novel: novel, chapter: chapter, content: prepared);
 
       // Prepare cache + handler context.
       final cache = _ref.read(audioCacheProvider);
@@ -143,10 +149,9 @@ class PlaybackCoordinator {
       );
 
       // Persist progress (optimistic, server reconciles on next refresh).
-      _ref.read(progressProvider.notifier).updateProgress(
-            novel.slug,
-            chapter.chapterNumber,
-          );
+      _ref
+          .read(progressProvider.notifier)
+          .updateProgress(novel.slug, chapter.chapterNumber);
     }
 
     _pushWidgetState();
@@ -167,11 +172,7 @@ class PlaybackCoordinator {
     required int paragraphIndex,
     List<String>? content,
   }) async {
-    await loadChapter(
-      novel: novel,
-      chapter: chapter,
-      initialContent: content,
-    );
+    await loadChapter(novel: novel, chapter: chapter, initialContent: content);
     await playParagraph(paragraphIndex);
   }
 
@@ -195,18 +196,15 @@ class PlaybackCoordinator {
     final audio = _ref.read(audioStateProvider);
     if (index < 0 || index >= audio.content.length) return;
 
-    // Silence current audio immediately so the user doesn't hear the old
-    // paragraph while the new one loads. Use pause (not stop) to avoid
-    // tearing down the MediaSession.
-    await _handler.pause();
-
     _ref.read(audioStateProvider.notifier).setCurrentIndex(index);
     _ref.read(audioStateProvider.notifier).setIsLoading(true);
 
     final novel = audio.novel;
     final chapter = audio.chapter;
     if (novel != null && chapter != null) {
-      _ref.read(lastPositionProvider.notifier).update(
+      _ref
+          .read(lastPositionProvider.notifier)
+          .update(
             novelSlug: novel.slug,
             chapter: chapter.chapterNumber,
             paragraph: index,
@@ -214,6 +212,9 @@ class PlaybackCoordinator {
           );
     }
 
+    // AudiobookHandler.playParagraph silences any previous audio via
+    // pauseForTransition() after atomically recording the new index/load
+    // state, so _wantsPlayback stays true across auto-advance transitions.
     final ok = await _handler.playParagraph(
       paragraphIndex: index,
       paragraphText: audio.content[index],
@@ -226,8 +227,10 @@ class PlaybackCoordinator {
 
   Future<void> toggle() async {
     await _handler.toggle();
-    final playing = _ref.read(audioStateProvider).isPlaying;
-    _ref.read(audioStateProvider.notifier).setIsPlaying(!playing);
+    final playing =
+        _handler.playbackState.valueOrNull?.playing ?? _handler.wantsPlayback;
+    _ref.read(audioStateProvider.notifier).setIsPlaying(playing);
+    _pushWidgetState();
   }
 
   Future<void> setSpeed(double speed) async {
@@ -301,6 +304,7 @@ class PlaybackCoordinator {
       await loadChapter(novel: novel, chapter: next, autoPlay: true);
     } catch (_) {
       // End of book or fetch error — stop playback.
+      await _handler.pause();
       _ref.read(audioStateProvider.notifier).setIsPlaying(false);
     }
   }

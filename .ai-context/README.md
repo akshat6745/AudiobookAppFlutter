@@ -6,8 +6,10 @@ Context files for AI agents working on this codebase. Read these **before** expl
 
 | File | Contents | When to read |
 |------|----------|-------------|
-| `CONTEXT.md` | Full reference: architecture, providers, models, patterns, routing, known issues | **Always — start here** |
-| `CHANGES.md` | Chronological log of significant changes made by AI agents | When debugging regressions or understanding recent decisions |
+| `AUDIOBOOK_HIGH_LEVEL_MAP.md` | Cross-repo high-level architecture, worktree topology, guardrails, change summary, and media playback overview | **First stop for cross-repo (Python + R2 Worker + Flutter) context** |
+| `AUDIOBOOK_LOW_LEVEL_MAP.md` | Commit-by-commit technical map across Python & Flutter, API/R2 contracts, and line-by-line media playback deep-dive | **When debugging backend/worker/Flutter integration or audio playback** |
+| `CONTEXT.md` | Flutter-specific reference: architecture, providers, models, patterns, routing, known issues | **Always before editing Flutter source files** |
+| `CHANGES.md` | Chronological log of significant changes made by AI agents in Flutter | When debugging regressions or understanding recent decisions |
 
 ## Usage tip
 
