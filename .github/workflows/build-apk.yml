@@ -17,6 +17,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.41.x'
           cache: true
       - run: flutter pub get
       - run: flutter test test/audio_interruption_test.dart
